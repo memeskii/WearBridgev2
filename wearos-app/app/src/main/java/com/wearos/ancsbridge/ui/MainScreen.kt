@@ -37,6 +37,8 @@ import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.PhoneIphone
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.BatteryStd
+import androidx.compose.material.icons.rounded.BatteryChargingFull
 import androidx.wear.compose.material3.Icon
 import com.wearos.ancsbridge.model.ConnectionState
 import com.wearos.ancsbridge.viewmodel.MainViewModel
@@ -78,6 +80,8 @@ fun HomeScreen(
 ) {
     val connectionState by viewModel.connectionState.collectAsState()
     val activeNotifs by viewModel.activeNotifications.collectAsState()
+    val watchBattery by viewModel.watchBatteryLevel.collectAsState()
+    val isCharging by viewModel.isWatchCharging.collectAsState()
 
     ScalingLazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -141,6 +145,35 @@ fun HomeScreen(
                                 "via ANCS over BLE",
                                 fontSize = 11.sp,
                                 color = Color(0xFF9CA3AF)
+                            )
+                        }
+                    }
+                }
+
+                item { Spacer(modifier = Modifier.height(4.dp)) }
+
+                // Watch Battery Telemetry Status
+                if (watchBattery != null) {
+                    item {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center,
+                            modifier = Modifier
+                                .fillMaxWidth(0.9f)
+                                .background(Color(0xFF1E293B), CircleShape)
+                                .padding(horizontal = 10.dp, vertical = 4.dp)
+                        ) {
+                            Icon(
+                                if (isCharging) Icons.Rounded.BatteryChargingFull else Icons.Rounded.BatteryStd,
+                                contentDescription = null,
+                                tint = if (isCharging) Color(0xFF34D399) else Color(0xFF60A5FA),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Battery: ${watchBattery}%${if (isCharging) " ⚡" else ""}",
+                                fontSize = 11.sp,
+                                color = Color(0xFFE2E8F0)
                             )
                         }
                     }

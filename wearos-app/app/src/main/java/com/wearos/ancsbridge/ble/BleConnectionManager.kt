@@ -67,6 +67,9 @@ class BleConnectionManager(private val context: Context) {
     private val characteristicWriteQueue = java.util.concurrent.ConcurrentLinkedQueue<ByteArray>()
     @Volatile
     private var isWritingCharacteristic = false
+    private var writeWatchdogJob: Job? = null
+    private var companionRetryJob: Job? = null
+    private var lastServiceDiscoveryTime = 0L
 
     var onDescriptorQueueDrained: (() -> Unit)? = null
     val isQueueBusy: Boolean
@@ -156,10 +159,15 @@ class BleConnectionManager(private val context: Context) {
             Log.i(TAG, "ANCS service found!")
             serviceDiscoveryRetries = 0
 
-            // If already subscribed (rediscovery for companion service), just read companion
+            // If already subscribed (rediscovery for companion service), check companion and flush queue
             if (notificationSourceChar != null && dataSourceChar != null) {
                 Log.i(TAG, "ANCS already subscribed, checking companion service")
                 readCompanionStatus()
+                val companionChar = findCompanionCharacteristic()
+                if (companionChar != null) {
+                    Log.i(TAG, "Companion characteristic confirmed on rediscovery, processing write queue (${characteristicWriteQueue.size} pending)")
+                    processCharacteristicWriteQueue()
+                }
                 return@GattCallback
             }
 
@@ -217,6 +225,7 @@ class BleConnectionManager(private val context: Context) {
             processDescriptorWriteQueue()
         },
         onCharacteristicWritten = { characteristic, status ->
+            writeWatchdogJob?.cancel()
             isWritingCharacteristic = false
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 Log.e(TAG, "Characteristic write failed: $status for ${characteristic.uuid}")
@@ -377,9 +386,40 @@ class BleConnectionManager(private val context: Context) {
      * Read the companion app's status characteristic to notify the iPhone app
      * that the watch has connected. This triggers didReceiveRead on the iOS side.
      */
+    private fun findCompanionCharacteristic(): BluetoothGattCharacteristic? {
+        val gatt = this.gatt ?: return null
+        val service = gatt.getService(AncsConstants.COMPANION_SERVICE_UUID)
+        val char = service?.getCharacteristic(AncsConstants.QUICK_REPLY_CHARACTERISTIC_UUID)
+        if (char != null) return char
+        return gatt.services.flatMap { it.characteristics }
+            .firstOrNull { it.uuid == AncsConstants.QUICK_REPLY_CHARACTERISTIC_UUID }
+    }
+
+    fun checkAndDiscoverCompanion() {
+        val now = System.currentTimeMillis()
+        if (now - lastServiceDiscoveryTime < 4000L) return
+        lastServiceDiscoveryTime = now
+        Log.i(TAG, "Requesting service discovery to locate iOS companion service")
+        gatt?.discoverServices()
+    }
+
+    private fun scheduleCompanionServiceCheck(delayMs: Long = 4000L) {
+        companionRetryJob?.cancel()
+        companionRetryJob = scope.launch {
+            delay(delayMs)
+            if (findCompanionCharacteristic() == null && gatt != null) {
+                checkAndDiscoverCompanion()
+            }
+        }
+    }
+
+    /**
+     * Read the companion app's status characteristic to notify the iPhone app
+     * that the watch has connected. This triggers didReceiveRead on the iOS side.
+     */
     private fun readCompanionStatus() {
         val gatt = this.gatt ?: return
-        val companionServiceUuid = java.util.UUID.fromString("A0E3D5B1-4C6F-4E8A-9B2D-7F1E3A5C8D0B")
+        val companionServiceUuid = AncsConstants.COMPANION_SERVICE_UUID
         val statusCharUuid = java.util.UUID.fromString("A0E3D5B2-4C6F-4E8A-9B2D-7F1E3A5C8D0B")
         val service = gatt.getService(companionServiceUuid)
         if (service != null) {
@@ -391,7 +431,8 @@ class BleConnectionManager(private val context: Context) {
                 Log.d(TAG, "Companion status characteristic not found")
             }
         } else {
-            Log.d(TAG, "Companion service not found — iPhone companion app may not be running")
+            Log.d(TAG, "Companion service not found — iPhone companion app may not be running yet")
+            scheduleCompanionServiceCheck()
         }
     }
 
@@ -421,11 +462,31 @@ class BleConnectionManager(private val context: Context) {
     @Synchronized
     private fun enqueueCompanionWrite(payload: ByteArray): Boolean {
         if (gatt == null) {
-            Log.e(TAG, "enqueueCompanionWrite: no GATT connection")
+            Log.d(TAG, "enqueueCompanionWrite: deferring payload (${payload.size} bytes), no active GATT connection")
             return false
         }
+
+        // Deduplicate BATT and HEALTH telemetry payloads to prevent stale queue accumulation
+        val prefix = when {
+            payload.startsWith("BATT:".toByteArray(Charsets.UTF_8)) -> "BATT:"
+            payload.startsWith("HEALTH:".toByteArray(Charsets.UTF_8)) -> "HEALTH:"
+            else -> null
+        }
+        if (prefix != null) {
+            val prefixBytes = prefix.toByteArray(Charsets.UTF_8)
+            characteristicWriteQueue.removeIf { it.startsWith(prefixBytes) }
+        }
+
         characteristicWriteQueue.add(payload)
         processCharacteristicWriteQueue()
+        return true
+    }
+
+    private fun ByteArray.startsWith(prefix: ByteArray): Boolean {
+        if (this.size < prefix.size) return false
+        for (i in prefix.indices) {
+            if (this[i] != prefix[i]) return false
+        }
         return true
     }
 
@@ -433,6 +494,7 @@ class BleConnectionManager(private val context: Context) {
     private fun processCharacteristicWriteQueue() {
         val gatt = this.gatt ?: run {
             characteristicWriteQueue.clear()
+            writeWatchdogJob?.cancel()
             isWritingCharacteristic = false
             return
         }
@@ -442,19 +504,31 @@ class BleConnectionManager(private val context: Context) {
             return
         }
 
-        val nextPayload = characteristicWriteQueue.poll() ?: return
-
-        val char = gatt.services.flatMap { it.characteristics }
-            .firstOrNull { it.uuid == AncsConstants.QUICK_REPLY_CHARACTERISTIC_UUID }
-            ?: run {
-                Log.e(TAG, "processCharacteristicWriteQueue: Characteristic ${AncsConstants.QUICK_REPLY_CHARACTERISTIC_UUID} not found")
-                isWritingCharacteristic = false
-                return
+        val char = findCompanionCharacteristic()
+        if (char == null) {
+            if (characteristicWriteQueue.isNotEmpty()) {
+                Log.d(TAG, "processCharacteristicWriteQueue: Companion characteristic not yet discovered. Queue size: ${characteristicWriteQueue.size}. Triggering discovery check.")
+                checkAndDiscoverCompanion()
             }
+            return
+        }
+
+        val nextPayload = characteristicWriteQueue.poll() ?: return
 
         isWritingCharacteristic = true
         val payloadStr = String(nextPayload, Charsets.UTF_8)
         Log.i(TAG, "processCharacteristicWriteQueue: Dispatching write '${payloadStr.take(30)}' (${nextPayload.size} bytes)")
+
+        // 2500ms watchdog to ensure write queue never locks up if ACK is missed
+        writeWatchdogJob?.cancel()
+        writeWatchdogJob = scope.launch {
+            delay(2500)
+            if (isWritingCharacteristic) {
+                Log.w(TAG, "writeCharacteristic timed out after 2500ms, resetting lock")
+                isWritingCharacteristic = false
+                processCharacteristicWriteQueue()
+            }
+        }
 
         val success = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             val status = gatt.writeCharacteristic(char, nextPayload, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
@@ -470,6 +544,7 @@ class BleConnectionManager(private val context: Context) {
 
         if (!success) {
             Log.e(TAG, "processCharacteristicWriteQueue: writeCharacteristic returned false, unblocking queue")
+            writeWatchdogJob?.cancel()
             isWritingCharacteristic = false
             processCharacteristicWriteQueue()
         }
@@ -595,6 +670,8 @@ class BleConnectionManager(private val context: Context) {
         notificationSourceChar = null
         controlPointChar = null
         dataSourceChar = null
+        writeWatchdogJob?.cancel()
+        companionRetryJob?.cancel()
         descriptorWriteQueue.clear()
         characteristicWriteQueue.clear()
         isWritingDescriptor = false

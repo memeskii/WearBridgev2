@@ -91,6 +91,7 @@ class BLEClientService(private val context: Context) {
     private val characteristicWriteQueue = java.util.concurrent.ConcurrentLinkedQueue<ByteArray>()
     @Volatile
     private var isWritingCharacteristic = false
+    private var writeWatchdogJob: Job? = null
 
     var onDescriptorQueueDrained: (() -> Unit)? = null
     val isQueueBusy: Boolean
@@ -236,6 +237,7 @@ class BLEClientService(private val context: Context) {
             processDescriptorWriteQueue()
         },
         onCharacteristicWritten = { characteristic, status ->
+            writeWatchdogJob?.cancel()
             isWritingCharacteristic = false
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 Log.e(TAG, "Characteristic write failed ($status) for ${characteristic.uuid}")
@@ -348,11 +350,31 @@ class BLEClientService(private val context: Context) {
     @Synchronized
     private fun enqueueCompanionWrite(payload: ByteArray): Boolean {
         if (gatt == null) {
-            Log.e(TAG, "enqueueCompanionWrite: No active GATT connection")
+            Log.d(TAG, "enqueueCompanionWrite: deferring payload (${payload.size} bytes), no active GATT connection")
             return false
         }
+
+        // Deduplicate BATT and HEALTH telemetry payloads to prevent stale queue accumulation
+        val prefix = when {
+            payload.startsWith("BATT:".toByteArray(Charsets.UTF_8)) -> "BATT:"
+            payload.startsWith("HEALTH:".toByteArray(Charsets.UTF_8)) -> "HEALTH:"
+            else -> null
+        }
+        if (prefix != null) {
+            val prefixBytes = prefix.toByteArray(Charsets.UTF_8)
+            characteristicWriteQueue.removeIf { it.startsWith(prefixBytes) }
+        }
+
         characteristicWriteQueue.add(payload)
         processCharacteristicWriteQueue()
+        return true
+    }
+
+    private fun ByteArray.startsWith(prefix: ByteArray): Boolean {
+        if (this.size < prefix.size) return false
+        for (i in prefix.indices) {
+            if (this[i] != prefix[i]) return false
+        }
         return true
     }
 
@@ -360,6 +382,7 @@ class BLEClientService(private val context: Context) {
     private fun processCharacteristicWriteQueue() {
         val gatt = this.gatt ?: run {
             characteristicWriteQueue.clear()
+            writeWatchdogJob?.cancel()
             isWritingCharacteristic = false
             return
         }
@@ -369,21 +392,35 @@ class BLEClientService(private val context: Context) {
             return
         }
 
-        val nextPayload = characteristicWriteQueue.poll() ?: return
-
         val companionService = gatt.getService(COMPANION_SERVICE_UUID)
         val characteristic = companionService?.getCharacteristic(QUICK_REPLY_CHARACTERISTIC_UUID)
             ?: gatt.services.flatMap { it.characteristics }
                 .firstOrNull { it.uuid == QUICK_REPLY_CHARACTERISTIC_UUID }
-            ?: run {
-                Log.e(TAG, "processCharacteristicWriteQueue: Characteristic $QUICK_REPLY_CHARACTERISTIC_UUID not found")
-                isWritingCharacteristic = false
-                return
+
+        if (characteristic == null) {
+            if (characteristicWriteQueue.isNotEmpty()) {
+                Log.d(TAG, "processCharacteristicWriteQueue: Companion characteristic not yet discovered. Queue size: ${characteristicWriteQueue.size}")
+                gatt.discoverServices()
             }
+            return
+        }
+
+        val nextPayload = characteristicWriteQueue.poll() ?: return
 
         isWritingCharacteristic = true
         val payloadStr = String(nextPayload, Charsets.UTF_8)
         Log.i(TAG, "processCharacteristicWriteQueue: Dispatching write '${payloadStr.take(30)}' (${nextPayload.size} bytes)")
+
+        // 2500ms watchdog to ensure write queue never locks up if ACK is missed
+        writeWatchdogJob?.cancel()
+        writeWatchdogJob = scope.launch {
+            delay(2500)
+            if (isWritingCharacteristic) {
+                Log.w(TAG, "writeCharacteristic timed out after 2500ms, resetting lock")
+                isWritingCharacteristic = false
+                processCharacteristicWriteQueue()
+            }
+        }
 
         val success = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val status = gatt.writeCharacteristic(
@@ -403,6 +440,7 @@ class BLEClientService(private val context: Context) {
 
         if (!success) {
             Log.e(TAG, "processCharacteristicWriteQueue: writeCharacteristic returned false, unblocking queue")
+            writeWatchdogJob?.cancel()
             isWritingCharacteristic = false
             processCharacteristicWriteQueue()
         }

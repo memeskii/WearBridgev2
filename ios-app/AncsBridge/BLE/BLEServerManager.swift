@@ -220,8 +220,8 @@ extension BLEServerManager: CBPeripheralManagerDelegate {
                     }
                     // 2. Check for Battery Telemetry: "BATT:<level>:<1|0>"
                     else if payload.hasPrefix("BATT:") {
-                        let content = String(payload.dropFirst("BATT:".count))
-                        let parts = content.split(separator: ":")
+                        let content = String(payload.dropFirst("BATT:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                        let parts = content.split(separator: ":").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
 
                         if parts.count >= 2,
                            let level = Int(parts[0]),
@@ -231,14 +231,14 @@ extension BLEServerManager: CBPeripheralManagerDelegate {
                             DispatchQueue.main.async {
                                 self.watchBatteryLevel = level
                                 self.isWatchCharging = isCharging
-                                self.logger.info("Live Watch Battery updated: \(level)% (charging: \(isCharging))")
+                                self.logger.info("✅ Live Watch Battery updated: \(level)% (charging: \(isCharging))")
                             }
                         }
                     }
                     // 3. Check for Health Telemetry: "HEALTH:<steps>:<heartRateBpm>:<activeKcal>"
                     else if payload.hasPrefix("HEALTH:") {
-                        let content = String(payload.dropFirst("HEALTH:".count))
-                        let parts = content.split(separator: ":")
+                        let content = String(payload.dropFirst("HEALTH:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                        let parts = content.split(separator: ":").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
 
                         if parts.count >= 3,
                            let steps = Int(parts[0]),

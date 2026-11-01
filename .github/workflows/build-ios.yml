@@ -5,11 +5,13 @@ on:
     branches: [ main, master ]
     paths:
       - 'ios-app/**'
+      - 'apps.json'
       - '.github/workflows/build-ios.yml'
   pull_request:
     branches: [ main, master ]
     paths:
       - 'ios-app/**'
+      - 'apps.json'
   workflow_dispatch:
 
 jobs:

@@ -73,6 +73,14 @@ class AncsService : Service() {
         private val _activeNotifications = MutableStateFlow<List<AncsNotification>>(emptyList())
         val activeNotifications: StateFlow<List<AncsNotification>> = _activeNotifications.asStateFlow()
 
+        /** Live watch battery percentage observable by UI */
+        private val _watchBatteryLevel = MutableStateFlow<Int?>(null)
+        val watchBatteryLevel: StateFlow<Int?> = _watchBatteryLevel.asStateFlow()
+
+        /** Live watch charging state observable by UI */
+        private val _isWatchCharging = MutableStateFlow(false)
+        val isWatchCharging: StateFlow<Boolean> = _isWatchCharging.asStateFlow()
+
         @Volatile
         var instance: AncsService? = null
             private set
@@ -128,6 +136,8 @@ class AncsService : Service() {
 
         // Start Bluetooth SIG Battery Service (BAS 0x180F) GATT server & live telemetry
         batteryGattServer = com.wearos.ancsbridge.ble.BatteryGattServer(this) { batteryPct, isCharging ->
+            _watchBatteryLevel.value = batteryPct
+            _isWatchCharging.value = isCharging
             connectionManager.sendBatteryTelemetry(batteryPct, isCharging)
         }
         batteryGattServer?.start()
@@ -178,7 +188,7 @@ class AncsService : Service() {
                     is ConnectionState.Bonding -> "Pairing with ${state.deviceName ?: "iPhone"}..."
                     is ConnectionState.Connected -> {
                         subscriptionTime = System.currentTimeMillis()
-                        // Note: battery state push is deferred until descriptor queue drains (see onDescriptorQueueDrained)
+                        batteryGattServer?.pushCurrentState()
                         "Connected to ${state.deviceName ?: "iPhone"}"
                     }
                     is ConnectionState.Disconnected -> "Disconnected"

@@ -35,6 +35,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Observe active live notifications received via ANCS
     val activeNotifications: StateFlow<List<AncsNotification>> = AncsService.activeNotifications
 
+    // Observe live watch battery level and charging state
+    val watchBatteryLevel: StateFlow<Int?> = AncsService.watchBatteryLevel
+    val isWatchCharging: StateFlow<Boolean> = AncsService.isWatchCharging
+
     private val _scanStatus = MutableStateFlow("")
     val scanStatus: StateFlow<String> = _scanStatus.asStateFlow()
 
