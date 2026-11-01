@@ -6,14 +6,35 @@
       "name": "WearBridge",
       "bundleIdentifier": "com.wearos.ancsbridge.companion",
       "developerName": "WearBridge",
-      "version": "1.1.0",
+      "subtitle": "Wear OS to iOS Notification & Battery Bridge",
+      "version": "1.1",
       "versionDate": "2026-11-01T20:00:00Z",
       "versionDescription": "Version 1.1: Robust watch battery gathering and live BLE telemetry dispatch, companion service auto-rediscovery, write queue watchdog timer, and Wear OS battery status UI.",
-      "downloadURL": "https://github.com/memeskii/WearBridgev2/releases/latest/download/AncsBridge-unsigned.ipa",
+      "downloadURL": "https://github.com/memeskii/WearBridgev2/releases/download/latest/AncsBridge-unsigned.ipa",
       "localizedDescription": "Bridge your Samsung Galaxy Watch / Wear OS watch to your iPhone. Enables ANCS notification mirroring, quick replies, native iOS battery widget integration, and health telemetry.",
       "iconURL": "https://raw.githubusercontent.com/memeskii/WearBridgev2/main/ios-app/AncsBridge/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
       "tintColor": "2563EB",
-      "size": 5242880
+      "size": 5242880,
+      "versions": [
+        {
+          "version": "1.1",
+          "buildVersion": "2",
+          "date": "2026-11-01T20:00:00Z",
+          "localizedDescription": "Version 1.1: Robust watch battery gathering and live BLE telemetry dispatch, companion service auto-rediscovery, write queue watchdog timer, and Wear OS battery status UI.",
+          "downloadURL": "https://github.com/memeskii/WearBridgev2/releases/download/latest/AncsBridge-unsigned.ipa",
+          "size": 5242880,
+          "minOSVersion": "16.0"
+        },
+        {
+          "version": "1.0",
+          "buildVersion": "1",
+          "date": "2026-11-01T08:00:00Z",
+          "localizedDescription": "Initial release with ANCS notifications and battery widget support.",
+          "downloadURL": "https://github.com/memeskii/WearBridgev2/releases/download/latest/AncsBridge-unsigned.ipa",
+          "size": 5242880,
+          "minOSVersion": "16.0"
+        }
+      ]
     }
   ]
 }

@@ -3,21 +3,14 @@ name: Build iOS Companion App
 on:
   push:
     branches: [ main, master ]
-    paths:
-      - 'ios-app/**'
-      - 'apps.json'
-      - '.github/workflows/build-ios.yml'
   pull_request:
     branches: [ main, master ]
-    paths:
-      - 'ios-app/**'
-      - 'apps.json'
   workflow_dispatch:
 
 jobs:
   build-ipa:
     name: Build Unsigned iOS IPA
-    runs-on: macos-14
+    runs-on: macos-latest
     permissions:
       contents: write
 
