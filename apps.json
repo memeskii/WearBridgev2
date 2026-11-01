@@ -7,7 +7,7 @@
       "bundleIdentifier": "com.wearos.ancsbridge.companion",
       "developerName": "WearBridge",
       "version": "1.1.0",
-      "versionDate": "2026-11-01T23:30:00Z",
+      "versionDate": "2026-11-01T20:00:00Z",
       "versionDescription": "Version 1.1: Robust watch battery gathering and live BLE telemetry dispatch, companion service auto-rediscovery, write queue watchdog timer, and Wear OS battery status UI.",
       "downloadURL": "https://github.com/memeskii/WearBridgev2/releases/latest/download/AncsBridge-unsigned.ipa",
       "localizedDescription": "Bridge your Samsung Galaxy Watch / Wear OS watch to your iPhone. Enables ANCS notification mirroring, quick replies, native iOS battery widget integration, and health telemetry.",
