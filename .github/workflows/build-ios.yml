@@ -16,6 +16,8 @@ jobs:
   build-ipa:
     name: Build Unsigned iOS IPA
     runs-on: macos-14
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout Repository
@@ -56,3 +58,14 @@ jobs:
           path: AncsBridge-unsigned.ipa
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish Rolling GitHub Release for SideStore
+        uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_name: latest
+          name: WearBridge Latest Release
+          body: Automated build containing latest unsigned IPA for SideStore OTA distribution.
+          files: AncsBridge-unsigned.ipa
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,19 @@
+﻿{
+  "name": "WearBridge Official Source",
+  "identifier": "com.wearos.wearbridge.source",
+  "apps": [
+    {
+      "name": "WearBridge",
+      "bundleIdentifier": "com.wearos.ancsbridge.companion",
+      "developerName": "WearBridge",
+      "version": "1.0.0",
+      "versionDate": "2026-11-01T08:00:00Z",
+      "versionDescription": "Complete WearBridge release with ANCS notifications, Quick Reply BLE transport, BAS 0x180F Battery widget support, brand badges, and Apple HealthKit sync.",
+      "downloadURL": "https://github.com/memeskii/WearBridgev2/releases/latest/download/AncsBridge-unsigned.ipa",
+      "localizedDescription": "Bridge your Samsung Galaxy Watch / Wear OS watch to your iPhone. Enables ANCS notification mirroring, quick replies, native iOS battery widget integration, and health telemetry.",
+      "iconURL": "https://raw.githubusercontent.com/memeskii/WearBridgev2/main/ios-app/AncsBridge/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
+      "tintColor": "2563EB",
+      "size": 5242880
+    }
+  ]
+}
