@@ -45,24 +45,39 @@ import com.wearos.ancsbridge.viewmodel.MainViewModel
 @Composable
 fun MainScreen(viewModel: MainViewModel) {
     var showPairScreen by remember { mutableStateOf(false) }
+    var showNotificationsScreen by remember { mutableStateOf(false) }
 
     if (showPairScreen) {
         PairNewDeviceScreen(
             viewModel = viewModel,
             onDismiss = { showPairScreen = false }
         )
+    } else if (showNotificationsScreen) {
+        val activeNotifs by viewModel.activeNotifications.collectAsState()
+        NotificationScreen(
+            notifications = activeNotifs,
+            onSendReply = { uid, reply -> viewModel.sendQuickReply(uid.toLong(), reply) },
+            onDismiss = { uid -> viewModel.dismissNotification(uid) },
+            onBack = { showNotificationsScreen = false }
+        )
     } else {
         HomeScreen(
             viewModel = viewModel,
-            onPairNewDevice = { showPairScreen = true }
+            onPairNewDevice = { showPairScreen = true },
+            onViewNotifications = { showNotificationsScreen = true }
         )
     }
 }
 
 @SuppressLint("MissingPermission")
 @Composable
-fun HomeScreen(viewModel: MainViewModel, onPairNewDevice: () -> Unit) {
+fun HomeScreen(
+    viewModel: MainViewModel,
+    onPairNewDevice: () -> Unit,
+    onViewNotifications: () -> Unit = {}
+) {
     val connectionState by viewModel.connectionState.collectAsState()
+    val activeNotifs by viewModel.activeNotifications.collectAsState()
 
     ScalingLazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -132,6 +147,25 @@ fun HomeScreen(viewModel: MainViewModel, onPairNewDevice: () -> Unit) {
                 }
 
                 item { Spacer(modifier = Modifier.height(8.dp)) }
+
+                // Live Notifications Button
+                item {
+                    Button(
+                        onClick = onViewNotifications,
+                        modifier = Modifier.fillMaxWidth(0.9f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (activeNotifs.isNotEmpty()) Color(0xFF2563EB) else Color(0xFF2E3440)
+                        )
+                    ) {
+                        Text(
+                            text = if (activeNotifs.isNotEmpty()) "Notifications (${activeNotifs.size})" else "Notifications (0)",
+                            fontSize = 12.sp,
+                            color = Color.White
+                        )
+                    }
+                }
+
+                item { Spacer(modifier = Modifier.height(4.dp)) }
 
                 // Clear notifications
                 item {

@@ -15,7 +15,7 @@ object AncsConstants {
     val COMPANION_SERVICE_UUID: UUID = UUID.fromString("A0E3D5B1-4C6F-4E8A-9B2D-7F1E3A5C8D0B")
 
     // Quick Reply Characteristic UUID (writable — sends reply text to iPhone)
-    val QUICK_REPLY_CHARACTERISTIC_UUID: UUID = UUID.fromString("A0E3D5B3-4C6F-4E8A-9B2D-7F1E3A5C8D0B")
+    val QUICK_REPLY_CHARACTERISTIC_UUID: UUID = UUID.fromString("7F8A0003-9B3C-4D2A-B9E1-8C5F6D7E8A01")
 
     // Call State Characteristic UUID (readable, notifiable — iPhone pushes call state to watch)
     val CALL_STATE_CHARACTERISTIC_UUID: UUID = UUID.fromString("A0E3D5B4-4C6F-4E8A-9B2D-7F1E3A5C8D0B")
@@ -81,6 +81,8 @@ object AncsConstants {
     // Action IDs (PerformNotificationAction)
     const val ACTION_POSITIVE = 0
     const val ACTION_NEGATIVE = 1
+    const val ACTION_ID_POSITIVE = 0
+    const val ACTION_ID_NEGATIVE = 1
 
     // Attributes that take a max-length parameter (2 bytes LE)
     val VARIABLE_LENGTH_ATTRIBUTES = setOf(

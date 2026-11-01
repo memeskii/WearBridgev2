@@ -32,6 +32,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
@@ -55,9 +56,11 @@ class AncsService : Service() {
         const val ACTION_RECONNECT = "com.wearos.ancsbridge.RECONNECT"
         const val ACTION_PERFORM_NOTIFICATION_ACTION = "com.wearos.ancsbridge.PERFORM_ACTION"
         const val ACTION_SEND_QUICK_REPLY = "com.wearos.ancsbridge.QUICK_REPLY"
+        const val ACTION_DISMISS_NOTIFICATION = "com.wearos.ancsbridge.DISMISS_NOTIFICATION"
         const val ACTION_CLEAR_ALL = "com.wearos.ancsbridge.CLEAR_ALL"
         const val EXTRA_DEVICE_ADDRESS = "device_address"
         const val EXTRA_ACTION_ID = "action_id"
+        const val EXTRA_NOTIFICATION_UID = "notification_uid"
         const val EXTRA_QUICK_REPLY_TEXT = "quick_reply_text"
         const val NOTIFICATION_ID_CALL = 999
         private const val MAX_ACTIVE_NOTIFICATIONS = 20 // Android limit is 25; keep headroom
@@ -65,6 +68,14 @@ class AncsService : Service() {
         /** Shared connection state observable by the ViewModel */
         private val _sharedConnectionState = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
         val sharedConnectionState: StateFlow<ConnectionState> = _sharedConnectionState.asStateFlow()
+
+        /** Live active incoming notifications observable by UI */
+        private val _activeNotifications = MutableStateFlow<List<AncsNotification>>(emptyList())
+        val activeNotifications: StateFlow<List<AncsNotification>> = _activeNotifications.asStateFlow()
+
+        @Volatile
+        var instance: AncsService? = null
+            private set
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -75,6 +86,8 @@ class AncsService : Service() {
 
     private val dataSourceAssembler = DataSourceAssembler()
     private val appNameCache = mutableMapOf<String, String>()
+    private var batteryGattServer: com.wearos.ancsbridge.ble.BatteryGattServer? = null
+    private var healthDataManager: com.wearos.ancsbridge.health.HealthDataManager? = null
 
     // Track active notification IDs in posting order (oldest first) for auto-cleanup
     private val activeNotificationIds = ArrayDeque<Int>()
@@ -98,6 +111,7 @@ class AncsService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         connectionManager = BleConnectionManager(this)
         scanner = BleScanner(this)
         notificationManager = getSystemService(NotificationManager::class.java)
@@ -111,6 +125,24 @@ class AncsService : Service() {
         AncsConnectionService.registerPhoneAccount(this)
 
         startForeground(SERVICE_NOTIFICATION_ID, buildServiceNotification("Starting..."))
+
+        // Start Bluetooth SIG Battery Service (BAS 0x180F) GATT server & live telemetry
+        batteryGattServer = com.wearos.ancsbridge.ble.BatteryGattServer(this) { batteryPct, isCharging ->
+            connectionManager.sendBatteryTelemetry(batteryPct, isCharging)
+        }
+        batteryGattServer?.start()
+
+        // Start Wear OS Health Sensors & Telemetry Manager
+        healthDataManager = com.wearos.ancsbridge.health.HealthDataManager(this) { steps, bpm, kcal ->
+            connectionManager.sendHealthTelemetry(steps, bpm, kcal)
+        }
+        healthDataManager?.start()
+
+        // Timing safeguard: Trigger companion battery & health telemetry once the ANCS CCCD queue is fully drained
+        connectionManager.onDescriptorQueueDrained = {
+            batteryGattServer?.pushCurrentState()
+            healthDataManager?.forcePushHealthUpdate()
+        }
 
         // Listen for Notification Source events
         scope.launch {
@@ -146,6 +178,7 @@ class AncsService : Service() {
                     is ConnectionState.Bonding -> "Pairing with ${state.deviceName ?: "iPhone"}..."
                     is ConnectionState.Connected -> {
                         subscriptionTime = System.currentTimeMillis()
+                        // Note: battery state push is deferred until descriptor queue drains (see onDescriptorQueueDrained)
                         "Connected to ${state.deviceName ?: "iPhone"}"
                     }
                     is ConnectionState.Disconnected -> "Disconnected"
@@ -190,10 +223,23 @@ class AncsService : Service() {
             }
             ACTION_SEND_QUICK_REPLY -> {
                 val replyText = intent.getStringExtra(EXTRA_QUICK_REPLY_TEXT) ?: return START_STICKY
-                val callerName = intent.getStringExtra("caller_name") ?: "Unknown"
-                val payload = "$callerName|$replyText"
-                Log.i(TAG, "Sending quick reply via BLE: $payload")
-                connectionManager.writeQuickReply(payload)
+                val uid = intent.getIntExtra(EXTRA_NOTIFICATION_UID, -1)
+                if (uid != -1) {
+                    Log.i(TAG, "Sending quick reply for UID #$uid: $replyText")
+                    connectionManager.sendQuickReply(uid, replyText)
+                } else {
+                    val callerName = intent.getStringExtra("caller_name") ?: "Unknown"
+                    val payload = "$callerName|$replyText"
+                    Log.i(TAG, "Sending legacy quick reply via BLE: $payload")
+                    connectionManager.writeQuickReply(payload)
+                }
+            }
+            ACTION_DISMISS_NOTIFICATION -> {
+                val uid = intent.getLongExtra(EXTRA_NOTIFICATION_UID, -1L)
+                if (uid != -1L) {
+                    Log.i(TAG, "Dismissing notification UID #$uid via ANCS Negative Action")
+                    dismissNotification(uid)
+                }
             }
             ACTION_CLEAR_ALL -> {
                 Log.i(TAG, "Clearing all notifications (${activeNotificationIds.size} tracked)")
@@ -201,6 +247,7 @@ class AncsService : Service() {
                     notificationManager.cancel(id)
                 }
                 activeNotificationIds.clear()
+                _activeNotifications.value = emptyList()
                 notificationManager.cancel(NOTIFICATION_ID_CALL)
             }
             ACTION_STOP -> {
@@ -216,6 +263,14 @@ class AncsService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        if (instance === this) {
+            instance = null
+        }
+        _activeNotifications.value = emptyList()
+        healthDataManager?.stop()
+        healthDataManager = null
+        batteryGattServer?.stop()
+        batteryGattServer = null
         try {
             unregisterReceiver(connectionManager.bondStateReceiver)
         } catch (_: IllegalArgumentException) { }
@@ -313,6 +368,9 @@ class AncsService : Service() {
                 val removedId = notificationIdForUid(event.notificationUid)
                 notificationManager.cancel(removedId)
                 activeNotificationIds.remove(removedId)
+                _activeNotifications.update { current ->
+                    current.filter { it.uid != event.notificationUid }
+                }
 
                 // If this was an incoming call, dismiss everything
                 if (event.isIncomingCall || activeCallUid == event.notificationUid) {
@@ -430,6 +488,12 @@ class AncsService : Service() {
         val appName = resolveAppName(notification.appIdentifier)
         val updatedNotification = notification.copy(appDisplayName = appName)
 
+        // Publish to active reactive state flow for Wear OS UI cards
+        _activeNotifications.update { current ->
+            (listOf(updatedNotification) + current.filter { it.uid != updatedNotification.uid })
+                .take(MAX_ACTIVE_NOTIFICATIONS)
+        }
+
         // Detect incoming calls by category OR by message content
         // WhatsApp sends calls as cat=4 (Social) with "☎" or "Incoming" in message
         // Regular phone may send as cat=1 (IncomingCall) or cat=2 with "Incoming" content
@@ -474,8 +538,11 @@ class AncsService : Service() {
         } else {
             AncsApplication.channelForCategory(notification.categoryId)
         }
-        val iconResId = AppIconMapper.getIconResId(notification.appIdentifier, notification.categoryId)
-        Log.d(TAG, "Icon mapping: app='${notification.appIdentifier}' cat=${notification.categoryId} -> resId=$iconResId (default=${R.drawable.ic_notification_default})")
+        val brandInfo = AppIconResolver.resolve(notification.appIdentifier)
+        val largeIconBitmap = AppIconRenderer.createLargeIconBitmap(this, notification.appIdentifier, 96)
+        val resolvedAppName = notification.appDisplayName?.ifEmpty { null } ?: appName ?: brandInfo.displayName
+        val smallIconResId = brandInfo.iconResId ?: AppIconMapper.getIconResId(notification.appIdentifier, notification.categoryId)
+        Log.d(TAG, "Brand resolved for '${notification.appIdentifier}': '${brandInfo.displayName}', primaryColor=${Integer.toHexString(brandInfo.primaryColorHex)}")
         val notifId = notificationIdForUid(notification.uid)
 
         val contentIntent = PendingIntent.getActivity(
@@ -484,16 +551,18 @@ class AncsService : Service() {
             PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Layout: contentTitle = sender, contentText = message preview, subText = app name
-        val senderName = notification.title.ifEmpty { notification.appDisplayName ?: notification.appIdentifier }
+        // Layout: contentTitle = sender, contentText = message preview, subText = resolved brand name
+        val senderName = notification.title.ifEmpty { notification.appDisplayName ?: brandInfo.displayName }
         val messagePreview = notification.message.ifEmpty { notification.subtitle ?: "" }
         val notifTime = parseAncsDate(notification.date)
 
         val builder = NotificationCompat.Builder(this, channelId)
-            .setSmallIcon(iconResId)
+            .setSmallIcon(smallIconResId)
+            .setLargeIcon(largeIconBitmap)
+            .setColor(brandInfo.primaryColorHex)
             .setContentTitle(senderName)
             .setContentText(messagePreview)
-            .setSubText(appName ?: notification.appIdentifier)
+            .setSubText(resolvedAppName)
             .setTicker("$senderName: $messagePreview")
             .setWhen(notifTime)
             .setShowWhen(true)
@@ -541,17 +610,21 @@ class AncsService : Service() {
             builder.addAction(R.drawable.ic_check, notification.positiveActionLabel, positiveIntent)
         }
 
+        val dismissIntent = PendingIntent.getBroadcast(
+            this, notifId + 500_000,
+            Intent(NotificationActionReceiver.ACTION_NEGATIVE).apply {
+                setPackage(packageName)
+                putExtra(NotificationActionReceiver.EXTRA_NOTIFICATION_UID, notification.uid)
+            },
+            PendingIntent.FLAG_IMMUTABLE
+        )
+
         if (notification.negativeActionLabel != null) {
-            val negativeIntent = PendingIntent.getBroadcast(
-                this, notifId + 500_000,
-                Intent(NotificationActionReceiver.ACTION_NEGATIVE).apply {
-                    setPackage(packageName)
-                    putExtra(NotificationActionReceiver.EXTRA_NOTIFICATION_UID, notification.uid)
-                },
-                PendingIntent.FLAG_IMMUTABLE
-            )
-            builder.addAction(R.drawable.ic_close, notification.negativeActionLabel, negativeIntent)
+            builder.addAction(R.drawable.ic_close, notification.negativeActionLabel, dismissIntent)
+        } else {
+            builder.addAction(R.drawable.ic_close, "Dismiss", dismissIntent)
         }
+        builder.setDeleteIntent(dismissIntent)
 
         // Never call setNotificationSilent() — it suppresses the heads-up overlay
         // on Wear OS. Let the channel handle sound/vibration. We handle vibration
@@ -670,6 +743,30 @@ class AncsService : Service() {
         val notifId = notificationIdForUid(uid)
         notificationManager.cancel(notifId)
         activeNotificationIds.remove(notifId)
+        _activeNotifications.update { current ->
+            current.filter { it.uid != uid }
+        }
+    }
+
+    /**
+     * Send quick reply over BLE to the iOS companion app.
+     */
+    fun sendQuickReply(notificationUid: Int, replyText: String): Boolean {
+        return connectionManager.sendQuickReply(notificationUid, replyText)
+    }
+
+    /**
+     * Dismiss an ANCS notification on both watch and iPhone (ActionIDNegative = 1).
+     */
+    fun dismissNotification(notificationUid: Long) {
+        performNotificationAction(notificationUid, AncsConstants.ACTION_ID_NEGATIVE)
+    }
+
+    /**
+     * Re-check permissions and register sensor listeners on demand.
+     */
+    fun recheckPermissionsAndRegisterSensors() {
+        healthDataManager?.start()
     }
 
     private fun resolveAppName(appIdentifier: String): String? {

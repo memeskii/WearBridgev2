@@ -26,6 +26,10 @@
 	<string>WearBridge needs Bluetooth to connect to your Pixel Watch and forward notifications.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>WearBridge needs Bluetooth to be discoverable by your Pixel Watch.</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>WearBridge reads health data to synchronize activity metrics with your Galaxy Watch.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>WearBridge writes steps, heart rate, and active calories from your Galaxy Watch into Apple Health.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-peripheral</string>

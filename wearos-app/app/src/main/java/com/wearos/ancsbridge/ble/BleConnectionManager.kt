@@ -63,6 +63,15 @@ class BleConnectionManager(private val context: Context) {
     private val descriptorWriteQueue = LinkedList<Pair<BluetoothGattCharacteristic, BluetoothGattDescriptor>>()
     private var isWritingDescriptor = false
 
+    // Outbound characteristic write queue — Android permits only ONE in-flight GATT write
+    private val characteristicWriteQueue = java.util.concurrent.ConcurrentLinkedQueue<ByteArray>()
+    @Volatile
+    private var isWritingCharacteristic = false
+
+    var onDescriptorQueueDrained: (() -> Unit)? = null
+    val isQueueBusy: Boolean
+        get() = isWritingDescriptor || descriptorWriteQueue.isNotEmpty() || isWritingCharacteristic || !characteristicWriteQueue.isEmpty()
+
     private var serviceDiscoveryRetries = 0
     private var notificationSourceChar: BluetoothGattCharacteristic? = null
     private var controlPointChar: BluetoothGattCharacteristic? = null
@@ -208,9 +217,13 @@ class BleConnectionManager(private val context: Context) {
             processDescriptorWriteQueue()
         },
         onCharacteristicWritten = { characteristic, status ->
+            isWritingCharacteristic = false
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 Log.e(TAG, "Characteristic write failed: $status for ${characteristic.uuid}")
+            } else {
+                Log.i(TAG, "Companion write confirmed for ${characteristic.uuid}")
             }
+            processCharacteristicWriteQueue()
         },
         onMtuChanged = { mtu, status ->
             Log.i(TAG, "MTU negotiated: $mtu (status=$status)")
@@ -400,28 +413,102 @@ class BleConnectionManager(private val context: Context) {
         Log.i(TAG, "Subscribing to call state characteristic")
     }
 
+    // MARK: - Outbound Characteristic Writes (Quick Reply, Battery, Health)
+
+    /**
+     * Enqueue and serialize an outbound characteristic write to the iOS Companion App.
+     */
+    @Synchronized
+    private fun enqueueCompanionWrite(payload: ByteArray): Boolean {
+        if (gatt == null) {
+            Log.e(TAG, "enqueueCompanionWrite: no GATT connection")
+            return false
+        }
+        characteristicWriteQueue.add(payload)
+        processCharacteristicWriteQueue()
+        return true
+    }
+
+    @Synchronized
+    private fun processCharacteristicWriteQueue() {
+        val gatt = this.gatt ?: run {
+            characteristicWriteQueue.clear()
+            isWritingCharacteristic = false
+            return
+        }
+
+        if (isWritingDescriptor || descriptorWriteQueue.isNotEmpty() || isWritingCharacteristic) {
+            Log.d(TAG, "processCharacteristicWriteQueue: Deferring write (busy). Queue size: ${characteristicWriteQueue.size}")
+            return
+        }
+
+        val nextPayload = characteristicWriteQueue.poll() ?: return
+
+        val char = gatt.services.flatMap { it.characteristics }
+            .firstOrNull { it.uuid == AncsConstants.QUICK_REPLY_CHARACTERISTIC_UUID }
+            ?: run {
+                Log.e(TAG, "processCharacteristicWriteQueue: Characteristic ${AncsConstants.QUICK_REPLY_CHARACTERISTIC_UUID} not found")
+                isWritingCharacteristic = false
+                return
+            }
+
+        isWritingCharacteristic = true
+        val payloadStr = String(nextPayload, Charsets.UTF_8)
+        Log.i(TAG, "processCharacteristicWriteQueue: Dispatching write '${payloadStr.take(30)}' (${nextPayload.size} bytes)")
+
+        val success = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            val status = gatt.writeCharacteristic(char, nextPayload, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+            status == android.bluetooth.BluetoothStatusCodes.SUCCESS
+        } else {
+            @Suppress("DEPRECATION")
+            char.value = nextPayload
+            @Suppress("DEPRECATION")
+            char.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            @Suppress("DEPRECATION")
+            gatt.writeCharacteristic(char)
+        }
+
+        if (!success) {
+            Log.e(TAG, "processCharacteristicWriteQueue: writeCharacteristic returned false, unblocking queue")
+            isWritingCharacteristic = false
+            processCharacteristicWriteQueue()
+        }
+    }
+
+    /**
+     * Send quick reply over BLE to the iOS companion app using custom characteristic.
+     * Format: "REPLY:<UID>:<TEXT>"
+     */
+    fun sendQuickReply(notificationUid: Int, replyText: String): Boolean {
+        val payload = "REPLY:$notificationUid:$replyText".toByteArray(Charsets.UTF_8)
+        return enqueueCompanionWrite(payload)
+    }
+
+    /**
+     * Send real-time battery telemetry to iOS Companion App.
+     * Format: "BATT:<level>:<1|0>" over characteristic 7F8A0003-9B3C-4D2A-B9E1-8C5F6D7E8A01.
+     */
+    fun sendBatteryTelemetry(batteryPct: Int, isCharging: Boolean): Boolean {
+        val chargingFlag = if (isCharging) 1 else 0
+        val payload = "BATT:$batteryPct:$chargingFlag".toByteArray(Charsets.UTF_8)
+        return enqueueCompanionWrite(payload)
+    }
+
+    /**
+     * Send real-time health telemetry to iOS Companion App.
+     * Format: "HEALTH:<steps>:<heartRateBpm>:<activeKcal>" over characteristic 7F8A0003-9B3C-4D2A-B9E1-8C5F6D7E8A01.
+     */
+    fun sendHealthTelemetry(steps: Int, heartRateBpm: Int, activeKcal: Int): Boolean {
+        val payload = "HEALTH:$steps:$heartRateBpm:$activeKcal".toByteArray(Charsets.UTF_8)
+        return enqueueCompanionWrite(payload)
+    }
+
     /**
      * Write quick reply payload to the iPhone companion app via BLE.
-     * Format: "callerName|replyMessage"
+     * Format: "callerName|replyMessage" (Legacy support)
      */
     fun writeQuickReply(payload: String) {
-        val gatt = this.gatt ?: run {
-            Log.e(TAG, "writeQuickReply: no GATT connection")
-            return
-        }
-        val service = gatt.getService(AncsConstants.COMPANION_SERVICE_UUID) ?: run {
-            Log.e(TAG, "writeQuickReply: companion service not found")
-            return
-        }
-        val char = service.getCharacteristic(AncsConstants.QUICK_REPLY_CHARACTERISTIC_UUID) ?: run {
-            Log.e(TAG, "writeQuickReply: quick reply characteristic not found")
-            return
-        }
-        val data = payload.toByteArray(Charsets.UTF_8)
-        char.value = data
-        char.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        val success = gatt.writeCharacteristic(char)
-        Log.i(TAG, "writeQuickReply: wrote ${data.size} bytes, success=$success")
+        enqueueCompanionWrite(payload.toByteArray(Charsets.UTF_8))
     }
 
     fun disconnect() {
@@ -474,10 +561,24 @@ class BleConnectionManager(private val context: Context) {
     }
 
     private fun processDescriptorWriteQueue() {
-        if (descriptorWriteQueue.isEmpty()) return
-        val (_, descriptor) = descriptorWriteQueue.poll() ?: return
+        if (descriptorWriteQueue.isEmpty()) {
+            isWritingDescriptor = false
+            Log.i(TAG, "ANCS descriptor write queue fully drained")
+            onDescriptorQueueDrained?.invoke()
+            processCharacteristicWriteQueue()
+            return
+        }
+        val (_, descriptor) = descriptorWriteQueue.poll() ?: run {
+            isWritingDescriptor = false
+            onDescriptorQueueDrained?.invoke()
+            return
+        }
         isWritingDescriptor = true
-        gatt?.writeDescriptor(descriptor)
+        val success = gatt?.writeDescriptor(descriptor) ?: false
+        if (!success) {
+            isWritingDescriptor = false
+            processDescriptorWriteQueue()
+        }
     }
 
     private fun scheduleReconnect() {
@@ -495,7 +596,9 @@ class BleConnectionManager(private val context: Context) {
         controlPointChar = null
         dataSourceChar = null
         descriptorWriteQueue.clear()
+        characteristicWriteQueue.clear()
         isWritingDescriptor = false
+        isWritingCharacteristic = false
     }
 
     fun destroy() {

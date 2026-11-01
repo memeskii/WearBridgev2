@@ -15,6 +15,12 @@ struct StatusView: View {
                         .padding(.horizontal)
                         .padding(.top, 8)
 
+                    // Galaxy Watch Battery Card
+                    watchBatteryCard
+
+                    // Watch Health & Activity Card
+                    watchHealthCard
+
                     // Features Card — editorial style
                     VStack(alignment: .leading, spacing: 0) {
                         // Illustration
@@ -293,6 +299,133 @@ struct StatusView: View {
         .padding(16)
         .background(statusColor.opacity(0.08))
         .cornerRadius(14)
+    }
+
+    // MARK: - Watch Battery Card
+
+    @ViewBuilder
+    private var watchBatteryCard: some View {
+        HStack(spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(viewModel.batteryTint.opacity(0.15))
+                    .frame(width: 48, height: 48)
+
+                Image(systemName: viewModel.batterySymbolName)
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundColor(viewModel.batteryTint)
+            }
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Text(viewModel.watchBatteryLevel != nil ? "\(viewModel.watchBatteryLevel!)%" : "--%")
+                        .font(.headline)
+                        .fontWeight(.bold)
+
+                    if viewModel.isWatchCharging {
+                        HStack(spacing: 4) {
+                            Image(systemName: "bolt.fill")
+                                .font(.system(size: 9))
+                            Text("Charging")
+                                .font(.caption2)
+                                .fontWeight(.semibold)
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.green.opacity(0.18))
+                        .foregroundColor(.green)
+                        .clipShape(Capsule())
+                    }
+                }
+
+                Text("Galaxy Watch Battery")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer()
+        }
+        .padding(14)
+        .background(Color(.secondarySystemGroupedBackground))
+        .cornerRadius(14)
+        .padding(.horizontal)
+    }
+
+    // MARK: - Watch Health & Activity Card
+
+    @ViewBuilder
+    private var watchHealthCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("Watch Health & Activity", systemImage: "heart.fill")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.pink)
+
+                Spacer()
+
+                if let syncDate = viewModel.lastHealthSyncDate {
+                    Text(syncDate, style: .time)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            HStack(spacing: 10) {
+                // Steps
+                statusHealthTile(
+                    icon: "figure.walk",
+                    color: .green,
+                    value: viewModel.watchSteps > 0 ? "\(viewModel.watchSteps)" : "--",
+                    label: "Steps"
+                )
+
+                // Heart Rate
+                statusHealthTile(
+                    icon: "heart.fill",
+                    color: .red,
+                    value: viewModel.watchHeartRate > 0 ? "\(viewModel.watchHeartRate)" : "--",
+                    label: "BPM"
+                )
+
+                // Active kcal
+                statusHealthTile(
+                    icon: "flame.fill",
+                    color: .orange,
+                    value: viewModel.watchActiveCalories > 0 ? "\(viewModel.watchActiveCalories)" : "--",
+                    label: "Active kcal"
+                )
+            }
+        }
+        .padding(14)
+        .background(Color(.secondarySystemGroupedBackground))
+        .cornerRadius(14)
+        .padding(.horizontal)
+    }
+
+    private func statusHealthTile(icon: String, color: Color, value: String, label: String) -> some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.caption2)
+                    .foregroundColor(color)
+                Text(label)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+
+            Text(value)
+                .font(.headline)
+                .fontWeight(.bold)
+                .foregroundColor(.primary)
+                .minimumScaleFactor(0.8)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .padding(.horizontal, 4)
+        .background(color.opacity(0.10))
+        .cornerRadius(10)
     }
 
     // MARK: - Watch Thumbnail

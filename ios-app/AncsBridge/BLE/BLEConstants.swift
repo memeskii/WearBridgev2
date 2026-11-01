@@ -10,7 +10,7 @@ enum BLEConstants {
     static let connectionStatusUUID = CBUUID(string: "A0E3D5B2-4C6F-4E8A-9B2D-7F1E3A5C8D0B")
 
     /// Characteristic: quick reply (writable by watch)
-    static let quickReplyCharacteristicUUID = CBUUID(string: "A0E3D5B3-4C6F-4E8A-9B2D-7F1E3A5C8D0B")
+    static let quickReplyCharacteristicUUID = CBUUID(string: "7F8A0003-9B3C-4D2A-B9E1-8C5F6D7E8A01")
 
     /// Characteristic: call state (readable, notifiable — pushes call state to watch)
     static let callStateCharacteristicUUID = CBUUID(string: "A0E3D5B4-4C6F-4E8A-9B2D-7F1E3A5C8D0B")

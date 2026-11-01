@@ -3,38 +3,36 @@ import Combine
 import UIKit
 import os.log
 
-/// Manages BLE for the WearBridge companion app.
+/// Manages central BLE watch discovery for the WearBridge companion app.
 ///
-/// Acts as both:
-/// - CBPeripheralManager: advertises for initial watch pairing
-/// - CBCentralManager: detects connected watches via system BLE connections
-///
-/// ANCS itself is system-managed — this class provides discoverability and
-/// connection status tracking.
+/// Delegates all peripheral GATT server and advertising duties to `BLEServerManager.shared`
+/// to guarantee only ONE CBPeripheralManager runs in the app.
 class PeripheralManager: NSObject, ObservableObject {
 
     private let logger = Logger(subsystem: "com.wearos.ancsbridge", category: "PeripheralManager")
 
-    private var peripheralManager: CBPeripheralManager!
-    private var centralManager: CBCentralManager!
+    // Single consolidated GATT peripheral manager
+    let serverManager = BLEServerManager.shared
 
-    @Published var isAdvertising = false
-    @Published var bluetoothState: CBManagerState = .unknown
+    private var centralManager: CBCentralManager!
+    private var cancellables = Set<AnyCancellable>()
+
     @Published var discoveredWatches: [DiscoveredWatch] = []
+    @Published var bluetoothState: CBManagerState = .unknown
+
+    // Forwarded properties from serverManager
+    var isAdvertising: Bool { serverManager.isAdvertising }
+    var incomingReplies: [WatchReply] { serverManager.incomingReplies }
+    var watchBatteryLevel: Int? { serverManager.watchBatteryLevel }
+    var isWatchCharging: Bool { serverManager.isWatchCharging }
 
     let settingsStore = SettingsStore()
-
-    private var companionService: CBMutableService?
-    private var statusCharacteristic: CBMutableCharacteristic?
-    private var callStateCharacteristic: CBMutableCharacteristic?
-    private var serviceAdded = false
     private var scanTimer: Timer?
 
     /// Monitors phone call state via CallKit for live call status sync
     let callStateObserver = CallStateObserver()
 
     /// Standard BLE service UUIDs to probe for connected devices.
-    /// Wear OS watches expose these standard GATT services.
     private static let probeServiceUUIDs: [CBUUID] = [
         CBUUID(string: "180A"),  // Device Information
         CBUUID(string: "180F"),  // Battery Service
@@ -51,13 +49,8 @@ class PeripheralManager: NSObject, ObservableObject {
 
     override init() {
         super.init()
-        peripheralManager = CBPeripheralManager(
-            delegate: self,
-            queue: nil,
-            options: [
-                CBPeripheralManagerOptionRestoreIdentifierKey: BLEConstants.restoreIdentifier
-            ]
-        )
+
+        // Only instantiate CBCentralManager for watch discovery — no duplicate CBPeripheralManager!
         centralManager = CBCentralManager(
             delegate: self,
             queue: nil,
@@ -66,12 +59,19 @@ class PeripheralManager: NSObject, ObservableObject {
             ]
         )
 
-        // Wire up call state observer to push BLE notifications
+        // Wire up call state observer to push BLE notifications via consolidated serverManager
         callStateObserver.onCallStateChanged = { [weak self] state in
-            self?.notifyCallState(state)
+            self?.serverManager.notifyCallState(state)
         }
-        // Start/stop based on setting
         updateCallStateObserving()
+
+        // Sync changes from serverManager to trigger objectWillChange
+        serverManager.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
     }
 
     /// Start or stop call state observing based on the current setting.
@@ -83,31 +83,23 @@ class PeripheralManager: NSObject, ObservableObject {
         }
     }
 
-    /// Push call state to all subscribed watches via BLE notification.
-    private func notifyCallState(_ state: UInt8) {
-        guard let char = callStateCharacteristic else { return }
-        let data = Data([state])
-        let sent = peripheralManager.updateValue(data, for: char, onSubscribedCentrals: nil)
-        let stateStr: String
-        switch state {
-        case BLEConstants.callStateRinging: stateStr = "ringing"
-        case BLEConstants.callStateActive: stateStr = "active"
-        case BLEConstants.callStateEnded: stateStr = "ended"
-        default: stateStr = "idle"
-        }
-        logger.info("Call state BLE notify: \(stateStr), sent=\(sent)")
+    // MARK: - Advertising Controls (Delegated to BLEServerManager)
+
+    func startAdvertising() {
+        serverManager.startAdvertising()
+    }
+
+    func stopAdvertising() {
+        serverManager.stopAdvertising()
     }
 
     // MARK: - Connected Watch Discovery
 
-    /// Query the system for BLE peripherals currently connected that look like watches.
-    /// Merges with persisted watches so offline ones still appear in the list.
     func refreshConnectedWatches() {
         guard centralManager.state == .poweredOn else { return }
 
         var found: [UUID: CBPeripheral] = [:]
 
-        // Retrieve peripherals connected to the system with known services
         for serviceUUID in Self.probeServiceUUIDs {
             let peripherals = centralManager.retrieveConnectedPeripherals(withServices: [serviceUUID])
             for peripheral in peripherals {
@@ -115,7 +107,6 @@ class PeripheralManager: NSObject, ObservableObject {
             }
         }
 
-        // Filter to likely watches by name
         var connectedWatchIds = Set<String>()
         var result: [DiscoveredWatch] = []
 
@@ -128,7 +119,6 @@ class PeripheralManager: NSObject, ObservableObject {
 
             guard isWatch || wasPreviouslySeen else { continue }
 
-            // Persist this watch
             savePersistedWatch(PersistedWatch(id: peripheral.identifier.uuidString, name: name))
             connectedWatchIds.insert(peripheral.identifier.uuidString)
 
@@ -140,7 +130,6 @@ class PeripheralManager: NSObject, ObservableObject {
             ))
         }
 
-        // Add offline (persisted but not currently connected) watches
         for saved in loadPersistedWatches() {
             if !connectedWatchIds.contains(saved.id), let uuid = UUID(uuidString: saved.id) {
                 result.append(DiscoveredWatch(
@@ -153,7 +142,6 @@ class PeripheralManager: NSObject, ObservableObject {
         }
 
         DispatchQueue.main.async {
-            // Connected watches first, then offline
             self.discoveredWatches = result.sorted { $0.isConnected && !$1.isConnected }
             let connected = result.filter { $0.isConnected }.count
             self.logger.info("Watches: \(connected) connected, \(result.count - connected) offline")
@@ -184,7 +172,6 @@ class PeripheralManager: NSObject, ObservableObject {
         }
     }
 
-    /// Start periodic scanning for connected watches
     func startWatchRefresh() {
         refreshConnectedWatches()
         scanTimer?.invalidate()
@@ -197,163 +184,13 @@ class PeripheralManager: NSObject, ObservableObject {
         scanTimer?.invalidate()
         scanTimer = nil
     }
-
-    // MARK: - Advertising
-
-    func startAdvertising() {
-        guard peripheralManager.state == .poweredOn else {
-            logger.warning("Cannot advertise: Bluetooth not powered on")
-            return
-        }
-
-        if peripheralManager.isAdvertising {
-            isAdvertising = true
-            return
-        }
-
-        peripheralManager.startAdvertising([
-            CBAdvertisementDataLocalNameKey: BLEConstants.advertisingLocalName,
-            CBAdvertisementDataServiceUUIDsKey: [BLEConstants.companionServiceUUID]
-        ])
-
-        logger.info("Started advertising as '\(BLEConstants.advertisingLocalName)'")
-    }
-
-    func stopAdvertising() {
-        peripheralManager.stopAdvertising()
-        isAdvertising = false
-        logger.info("Stopped advertising")
-    }
-
-    private func setupServices() {
-        guard !serviceAdded else { return }
-
-        statusCharacteristic = CBMutableCharacteristic(
-            type: BLEConstants.connectionStatusUUID,
-            properties: [.read, .notify],
-            value: nil,
-            permissions: [.readable]
-        )
-
-        let quickReplyCharacteristic = CBMutableCharacteristic(
-            type: BLEConstants.quickReplyCharacteristicUUID,
-            properties: [.write, .writeWithoutResponse],
-            value: nil,
-            permissions: [.writeable]
-        )
-
-        callStateCharacteristic = CBMutableCharacteristic(
-            type: BLEConstants.callStateCharacteristicUUID,
-            properties: [.read, .notify],
-            value: nil,
-            permissions: [.readable]
-        )
-
-        companionService = CBMutableService(
-            type: BLEConstants.companionServiceUUID,
-            primary: true
-        )
-        companionService?.characteristics = [statusCharacteristic!, quickReplyCharacteristic, callStateCharacteristic!]
-
-        peripheralManager.add(companionService!)
-        serviceAdded = true
-        logger.info("Companion service added")
-    }
-}
-
-// MARK: - CBPeripheralManagerDelegate
-extension PeripheralManager: CBPeripheralManagerDelegate {
-
-    func peripheralManagerDidUpdateState(_ peripheral: CBPeripheralManager) {
-        bluetoothState = peripheral.state
-        logger.info("Peripheral Bluetooth state: \(peripheral.state.rawValue)")
-
-        switch peripheral.state {
-        case .poweredOn:
-            setupServices()
-            if settingsStore.autoAdvertise {
-                startAdvertising()
-            }
-        case .poweredOff:
-            isAdvertising = false
-            discoveredWatches = []
-        default:
-            break
-        }
-    }
-
-    func peripheralManagerDidStartAdvertising(_ peripheral: CBPeripheralManager, error: Error?) {
-        if let error = error {
-            logger.error("Failed to start advertising: \(error.localizedDescription)")
-            isAdvertising = false
-        } else {
-            isAdvertising = true
-        }
-    }
-
-    func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didSubscribeTo characteristic: CBCharacteristic) {
-        logger.info("Central subscribed: \(central.identifier)")
-    }
-
-    func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didUnsubscribeFrom characteristic: CBCharacteristic) {
-        logger.info("Central unsubscribed: \(central.identifier)")
-    }
-
-    func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveRead request: CBATTRequest) {
-        if request.characteristic.uuid == BLEConstants.connectionStatusUUID {
-            request.value = Data([0x01])
-            peripheral.respond(to: request, withResult: .success)
-        } else if request.characteristic.uuid == BLEConstants.callStateCharacteristicUUID {
-            request.value = Data([callStateObserver.currentState])
-            peripheral.respond(to: request, withResult: .success)
-        } else {
-            peripheral.respond(to: request, withResult: .attributeNotFound)
-        }
-    }
-
-    func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
-        for request in requests {
-            if request.characteristic.uuid == BLEConstants.quickReplyCharacteristicUUID,
-               let data = request.value,
-               let payload = String(data: data, encoding: .utf8) {
-                logger.info("Quick reply received: \(payload)")
-                handleQuickReply(payload)
-            }
-            peripheral.respond(to: request, withResult: .success)
-        }
-    }
-
-    private func handleQuickReply(_ payload: String) {
-        let encoded = payload.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? payload
-        let urlString = "shortcuts://run-shortcut?name=WearBridge%20Reply&input=text&text=\(encoded)"
-        if let url = URL(string: urlString) {
-            DispatchQueue.main.async {
-                UIApplication.shared.open(url) { success in
-                    if success {
-                        self.logger.info("Opened WearBridge Reply shortcut")
-                    } else {
-                        self.logger.error("Failed to open Shortcuts — is 'WearBridge Reply' shortcut created?")
-                    }
-                }
-            }
-        }
-    }
-
-    func peripheralManager(_ peripheral: CBPeripheralManager, willRestoreState dict: [String: Any]) {
-        logger.info("Restoring peripheral manager state")
-        if let services = dict[CBPeripheralManagerRestoredStateServicesKey] as? [CBMutableService] {
-            serviceAdded = !services.isEmpty
-        }
-        if peripheral.isAdvertising {
-            isAdvertising = true
-        }
-    }
 }
 
 // MARK: - CBCentralManagerDelegate
 extension PeripheralManager: CBCentralManagerDelegate {
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        bluetoothState = central.state
         logger.info("Central Bluetooth state: \(central.state.rawValue)")
 
         if central.state == .poweredOn {

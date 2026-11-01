@@ -12,6 +12,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.wearos.ancsbridge.ancs.AncsService
 import com.wearos.ancsbridge.ble.BleScanner
+import com.wearos.ancsbridge.model.AncsNotification
 import com.wearos.ancsbridge.model.ConnectionState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -30,6 +31,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // Observe the service's shared connection state directly
     val connectionState: StateFlow<ConnectionState> = AncsService.sharedConnectionState
+
+    // Observe active live notifications received via ANCS
+    val activeNotifications: StateFlow<List<AncsNotification>> = AncsService.activeNotifications
 
     private val _scanStatus = MutableStateFlow("")
     val scanStatus: StateFlow<String> = _scanStatus.asStateFlow()
@@ -181,6 +185,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             action = AncsService.ACTION_CLEAR_ALL
         }
         context.startService(intent)
+    }
+
+    /**
+     * Send a quick reply to the iOS companion app for a specific notification.
+     */
+    fun sendQuickReply(notificationUid: Long, replyText: String): Boolean {
+        val service = AncsService.instance
+        return if (service != null) {
+            service.sendQuickReply(notificationUid.toInt(), replyText)
+        } else {
+            val intent = Intent(getApplication(), AncsService::class.java).apply {
+                action = AncsService.ACTION_SEND_QUICK_REPLY
+                putExtra(AncsService.EXTRA_NOTIFICATION_UID, notificationUid.toInt())
+                putExtra(AncsService.EXTRA_QUICK_REPLY_TEXT, replyText)
+            }
+            getApplication<Application>().startService(intent)
+            true
+        }
+    }
+
+    /**
+     * Dismiss a notification on both watch and iPhone (ActionIDNegative = 1).
+     */
+    fun dismissNotification(notificationUid: Long) {
+        val service = AncsService.instance
+        if (service != null) {
+            service.dismissNotification(notificationUid)
+        } else {
+            val intent = Intent(getApplication(), AncsService::class.java).apply {
+                action = AncsService.ACTION_DISMISS_NOTIFICATION
+                putExtra(AncsService.EXTRA_NOTIFICATION_UID, notificationUid)
+            }
+            getApplication<Application>().startService(intent)
+        }
+    }
+
+    /**
+     * Called when runtime permissions are granted to re-register health sensors.
+     */
+    fun onPermissionsGranted() {
+        AncsService.instance?.recheckPermissionsAndRegisterSensors()
     }
 
     override fun onCleared() {
