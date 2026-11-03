@@ -39,10 +39,10 @@ public struct PacketFlags: OptionSet, CustomStringConvertible {
         self.rawValue = rawValue
     }
 
-    public static let startOfTransfer = PacketFlags(rawValue: 1 << 0) // Bit 0 (0x01)
-    public static let endOfTransfer   = PacketFlags(rawValue: 1 << 1) // Bit 1 (0x02)
-    public static let ack             = PacketFlags(rawValue: 1 << 2) // Bit 2 (0x04)
-    public static let crcError        = PacketFlags(rawValue: 1 << 3) // Bit 3 (0x08)
+    public static let startOfTransfer = PacketFlags(rawValue: 0x01) // Bit 0 (0x01)
+    public static let endOfTransfer   = PacketFlags(rawValue: 0x02) // Bit 1 (0x02)
+    public static let ack             = PacketFlags(rawValue: 0x04) // Bit 2 (0x04)
+    public static let crcError        = PacketFlags(rawValue: 0x08) // Bit 3 (0x08)
 
     public var description: String {
         var names: [String] = []
@@ -205,19 +205,15 @@ public class BLEPacketMultiplexer: ObservableObject {
             }
 
             let payloadLength = fullBuffer.count - 4
-            let payload = fullBuffer.prefix(payloadLength)
-            let receivedCrcBytes = fullBuffer.suffix(4)
-
-            let expectedCrc = (UInt32(receivedCrcBytes[receivedCrcBytes.startIndex]) << 24) |
-                              (UInt32(receivedCrcBytes[receivedCrcBytes.startIndex + 1]) << 16) |
-                              (UInt32(receivedCrcBytes[receivedCrcBytes.startIndex + 2]) << 8) |
-                              UInt32(receivedCrcBytes[receivedCrcBytes.startIndex + 3])
+            let payload = Data(fullBuffer.prefix(payloadLength))
+            let suffixBytes = fullBuffer.suffix(4)
+            let expectedCrc = suffixBytes.reduce(0 as UInt32) { ($0 << 8) | UInt32($1) }
 
             let computedCrc = CRC32.checksum(data: payload)
 
             if computedCrc == expectedCrc {
                 logger.info("CRC32 Verified for \(channel.name) (\(payload.count) bytes, CRC=0x\(String(format: "%08X", computedCrc)))")
-                onPayloadReceived?(channel, Data(payload))
+                onPayloadReceived?(channel, payload)
             } else {
                 logger.error("CRC32 Mismatch on \(channel.name)! Computed: 0x\(String(format: "%08X", computedCrc)), Expected: 0x\(String(format: "%08X", expectedCrc))")
                 sendCrcError(channel: channel, sequenceNumber: seq)

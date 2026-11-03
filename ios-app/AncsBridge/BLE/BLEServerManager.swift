@@ -330,9 +330,9 @@ public class BLEServerManager: NSObject, ObservableObject {
 
                 let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1.0, repeats: false)
                 let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: trigger)
-                center.add(request) { error in
+                center.add(request) { [weak self] error in
                     if let error = error {
-                        self.logger.error("Failed to add UNNotification: \(error.localizedDescription)")
+                        self?.logger.error("Failed to add UNNotification: \(error.localizedDescription)")
                     }
                 }
             }
@@ -411,7 +411,9 @@ public class BLEServerManager: NSObject, ObservableObject {
 
         // Generate pseudo-random bytes
         var randomBytes = [UInt8](repeating: 0, count: sizeBytes)
-        _ = SecRandomCopyBytes(kSecRandomDefault, sizeBytes, &randomBytes)
+        for i in 0..<sizeBytes {
+            randomBytes[i] = UInt8((i * 31 + 17) & 0xFF)
+        }
         let fileData = Data(randomBytes)
 
         let mtu = currentWriteMtu()

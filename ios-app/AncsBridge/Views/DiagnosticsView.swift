@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct DiagnosticsView: View {
     @EnvironmentObject var viewModel: BLEViewModel
