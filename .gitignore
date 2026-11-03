@@ -64,3 +64,9 @@ Package.resolved
 *.tmp
 *.bak
 *.orig
+
+# AntiCrow ローカルデータ
+.anticrow/
+.agent/
+__pycache__/
+*.pyc

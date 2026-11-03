@@ -33,6 +33,11 @@ struct ContentView: View {
                 .tabItem {
                     Label("Settings", systemImage: "gearshape")
                 }
+
+            DiagnosticsView()
+                .tabItem {
+                    Label("Diagnostics", systemImage: "wrench.and.screwdriver")
+                }
         }
         .onAppear {
             HealthKitManager.shared.requestAuthorization()
@@ -101,10 +106,10 @@ struct ContentView: View {
     // MARK: - Watch Health & Activity Section
     @ViewBuilder
     private var watchHealthSection: some View {
-        Section(header: Text("Watch Health & Activity")) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 10) {
-                    // Steps tile
+        Section(header: Text("Watch Health & Telemetry")) {
+            VStack(alignment: .leading, spacing: 10) {
+                // Row 1: Steps, Heart Rate, SpO2
+                HStack(spacing: 8) {
                     healthTile(
                         icon: "figure.walk",
                         color: .green,
@@ -112,7 +117,6 @@ struct ContentView: View {
                         label: "Steps"
                     )
 
-                    // Heart Rate tile
                     healthTile(
                         icon: "heart.fill",
                         color: .red,
@@ -120,12 +124,39 @@ struct ContentView: View {
                         label: "BPM"
                     )
 
-                    // Active Calories tile
+                    healthTile(
+                        icon: "lungs.fill",
+                        color: .blue,
+                        value: viewModel.watchBloodOxygen != nil ? "\(viewModel.watchBloodOxygen!)%" : "--%",
+                        label: "SpO2"
+                    )
+                }
+
+                // Row 2: Calories, Stress, Sleep
+                HStack(spacing: 8) {
                     healthTile(
                         icon: "flame.fill",
                         color: .orange,
-                        value: viewModel.watchActiveCalories > 0 ? "\(viewModel.watchActiveCalories)" : "--",
-                        label: "Active kcal"
+                        value: (viewModel.watchTotalCalories > 0 ? viewModel.watchTotalCalories : viewModel.watchActiveCalories) > 0
+                            ? "\((viewModel.watchTotalCalories > 0 ? viewModel.watchTotalCalories : viewModel.watchActiveCalories))"
+                            : "--",
+                        label: "Total kcal"
+                    )
+
+                    healthTile(
+                        icon: "waveform.path.ecg",
+                        color: .purple,
+                        value: viewModel.watchStressLevel != nil ? "\(viewModel.watchStressLevel!)" : "--",
+                        label: "Stress"
+                    )
+
+                    healthTile(
+                        icon: "moon.stars.fill",
+                        color: .indigo,
+                        value: viewModel.watchSleepDurationMinutes != nil
+                            ? "\(viewModel.watchSleepDurationMinutes! / 60)h \(viewModel.watchSleepDurationMinutes! % 60)m"
+                            : "--",
+                        label: viewModel.watchSleepStatus?.capitalized ?? "Sleep"
                     )
                 }
 

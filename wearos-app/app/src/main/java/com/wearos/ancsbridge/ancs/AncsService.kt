@@ -143,8 +143,8 @@ class AncsService : Service() {
         batteryGattServer?.start()
 
         // Start Wear OS Health Sensors & Telemetry Manager
-        healthDataManager = com.wearos.ancsbridge.health.HealthDataManager(this) { steps, bpm, kcal ->
-            connectionManager.sendHealthTelemetry(steps, bpm, kcal)
+        healthDataManager = com.wearos.ancsbridge.health.HealthDataManager(this) { payload ->
+            connectionManager.sendHealthTelemetry(payload)
         }
         healthDataManager?.start()
 

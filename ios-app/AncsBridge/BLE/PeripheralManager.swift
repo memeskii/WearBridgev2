@@ -19,12 +19,15 @@ class PeripheralManager: NSObject, ObservableObject {
 
     @Published var discoveredWatches: [DiscoveredWatch] = []
     @Published var bluetoothState: CBManagerState = .unknown
+    @Published var rssiValue: Int? = nil
+    @Published var mtuSize: Int = 512
 
     // Forwarded properties from serverManager
     var isAdvertising: Bool { serverManager.isAdvertising }
     var incomingReplies: [WatchReply] { serverManager.incomingReplies }
     var watchBatteryLevel: Int? { serverManager.watchBatteryLevel }
     var isWatchCharging: Bool { serverManager.isWatchCharging }
+    var negotiatedMTU: Int { serverManager.negotiatedMTU }
 
     let settingsStore = SettingsStore()
     private var scanTimer: Timer?
@@ -122,6 +125,14 @@ class PeripheralManager: NSObject, ObservableObject {
             savePersistedWatch(PersistedWatch(id: peripheral.identifier.uuidString, name: name))
             connectedWatchIds.insert(peripheral.identifier.uuidString)
 
+            peripheral.delegate = self
+            peripheral.readRSSI()
+            let mtu = peripheral.maximumWriteValueLength(for: .withoutResponse)
+            if mtu > 0 {
+                self.mtuSize = mtu
+                self.serverManager.negotiatedMTU = mtu
+            }
+
             result.append(DiscoveredWatch(
                 id: peripheral.identifier,
                 name: name,
@@ -199,6 +210,18 @@ extension PeripheralManager: CBCentralManagerDelegate {
             stopWatchRefresh()
             DispatchQueue.main.async {
                 self.discoveredWatches = []
+            }
+        }
+    }
+}
+
+// MARK: - CBPeripheralDelegate
+extension PeripheralManager: CBPeripheralDelegate {
+    func peripheral(_ peripheral: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {
+        if error == nil {
+            DispatchQueue.main.async {
+                self.rssiValue = RSSI.intValue
+                self.serverManager.rssiValue = RSSI.intValue
             }
         }
     }

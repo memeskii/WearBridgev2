@@ -39,14 +39,15 @@ jobs:
 
       - name: Rename APK for Distribution
         run: |
+          cp wearos-app/app/build/outputs/apk/debug/app-debug.apk WearBridge-WearOS-v1.2-debug.apk
           cp wearos-app/app/build/outputs/apk/debug/app-debug.apk WearBridge-WearOS-v1.1-debug.apk
-          ls -lh WearBridge-WearOS-v1.1-debug.apk
+          ls -lh WearBridge-WearOS-v1.2-debug.apk
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: WearBridge-WearOS-v1.1-debug
-          path: WearBridge-WearOS-v1.1-debug.apk
+          name: WearBridge-WearOS-v1.2-debug
+          path: WearBridge-WearOS-v1.2-debug.apk
           if-no-files-found: error
           retention-days: 14
 
@@ -55,6 +56,8 @@ jobs:
         if: github.ref == 'refs/heads/main'
         with:
           tag_name: latest
-          files: WearBridge-WearOS-v1.1-debug.apk
+          files: |
+            WearBridge-WearOS-v1.2-debug.apk
+            WearBridge-WearOS-v1.1-debug.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

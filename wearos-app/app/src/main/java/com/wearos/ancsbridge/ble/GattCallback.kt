@@ -9,7 +9,7 @@ import android.bluetooth.BluetoothProfile
 import android.util.Log
 
 /**
- * BluetoothGattCallback implementation that routes ANCS characteristic changes
+ * BluetoothGattCallback implementation that routes ANCS and Companion characteristic changes
  * to the appropriate handlers.
  */
 @SuppressLint("MissingPermission")
@@ -23,7 +23,8 @@ class GattCallback(
     private val onCharacteristicWritten: (BluetoothGattCharacteristic, Int) -> Unit,
     private val onMtuChanged: (Int, Int) -> Unit,
     private val onCharacteristicReadCallback: ((BluetoothGattCharacteristic, ByteArray) -> Unit)? = null,
-    private val onCallStateChanged: ((ByteArray) -> Unit)? = null
+    private val onCallStateChanged: ((ByteArray) -> Unit)? = null,
+    private val onCompanionDataReceived: ((ByteArray) -> Unit)? = null
 ) : BluetoothGattCallback() {
 
     companion object {
@@ -84,6 +85,10 @@ class GattCallback(
             AncsConstants.CALL_STATE_CHARACTERISTIC_UUID.toString().uppercase() -> {
                 Log.d(TAG, "Call State: ${data.toHexString()}")
                 onCallStateChanged?.invoke(data)
+            }
+            AncsConstants.QUICK_REPLY_CHARACTERISTIC_UUID.toString().uppercase() -> {
+                Log.d(TAG, "Companion Quick Reply/Multiplexer: ${data.size} bytes")
+                onCompanionDataReceived?.invoke(data)
             }
             else -> {
                 Log.d(TAG, "Unknown characteristic changed: $uuid")

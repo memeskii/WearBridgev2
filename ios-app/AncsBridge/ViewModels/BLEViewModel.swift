@@ -24,8 +24,38 @@ class BLEViewModel: ObservableObject {
     /// Estimated active calories burned
     @Published var watchActiveCalories: Int = 0
 
+    /// Estimated resting calories burned
+    @Published var watchRestingCalories: Int = 0
+
+    /// Total calories burned (active + resting)
+    @Published var watchTotalCalories: Int = 0
+
+    /// Live SpO2 blood oxygen saturation percentage
+    @Published var watchBloodOxygen: Int? = nil
+
+    /// Live stress level index (0-100)
+    @Published var watchStressLevel: Int? = nil
+
+    /// Live sleep session status
+    @Published var watchSleepStatus: String? = nil
+
+    /// Total sleep duration in minutes
+    @Published var watchSleepDurationMinutes: Int? = nil
+
+    /// Sleep efficiency percentage
+    @Published var watchSleepEfficiency: Int? = nil
+
     /// Timestamp of most recent health sync
     @Published var lastHealthSyncDate: Date? = nil
+
+    /// Live negotiated MTU size
+    @Published var negotiatedMTU: Int = 512
+
+    /// Live watch RSSI (signal strength)
+    @Published var rssiValue: Int? = nil
+
+    /// Live packet log entries from BLEPacketMultiplexer
+    @Published var packetLogs: [PacketLogEntry] = []
 
     private var cancellables = Set<AnyCancellable>()
 
@@ -98,10 +128,80 @@ class BLEViewModel: ObservableObject {
             }
             .store(in: &cancellables)
 
+        serverManager.$watchRestingCalories
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] kcal in
+                self?.watchRestingCalories = kcal
+            }
+            .store(in: &cancellables)
+
+        serverManager.$watchTotalCalories
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] kcal in
+                self?.watchTotalCalories = kcal
+            }
+            .store(in: &cancellables)
+
+        serverManager.$watchBloodOxygen
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] spo2 in
+                self?.watchBloodOxygen = spo2
+            }
+            .store(in: &cancellables)
+
+        serverManager.$watchStressLevel
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] stress in
+                self?.watchStressLevel = stress
+            }
+            .store(in: &cancellables)
+
+        serverManager.$watchSleepStatus
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] status in
+                self?.watchSleepStatus = status
+            }
+            .store(in: &cancellables)
+
+        serverManager.$watchSleepDurationMinutes
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] duration in
+                self?.watchSleepDurationMinutes = duration
+            }
+            .store(in: &cancellables)
+
+        serverManager.$watchSleepEfficiency
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] eff in
+                self?.watchSleepEfficiency = eff
+            }
+            .store(in: &cancellables)
+
         serverManager.$lastHealthSyncDate
             .receive(on: DispatchQueue.main)
             .sink { [weak self] date in
                 self?.lastHealthSyncDate = date
+            }
+            .store(in: &cancellables)
+
+        serverManager.$negotiatedMTU
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] mtu in
+                self?.negotiatedMTU = mtu
+            }
+            .store(in: &cancellables)
+
+        serverManager.$rssiValue
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] rssi in
+                self?.rssiValue = rssi
+            }
+            .store(in: &cancellables)
+
+        serverManager.multiplexer.$packetLogs
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] logs in
+                self?.packetLogs = logs
             }
             .store(in: &cancellables)
     }
@@ -137,5 +237,41 @@ class BLEViewModel: ObservableObject {
         } else {
             serverManager.startAdvertising()
         }
+    }
+
+    // MARK: - Diagnostics Test Actions
+    func sendTestPing(completion: @escaping (Result<Int, Error>) -> Void) {
+        serverManager.sendTestPing(completion: completion)
+    }
+
+    func sendTestNotification(title: String = "Test Notification", message: String = "Custom GATT Alert from iPhone") {
+        serverManager.sendTestNotification(title: title, message: message)
+    }
+
+    func sendMockIncomingCall(callerName: String = "Jane Doe", phoneNumber: String = "+1 (555) 019-2834") {
+        serverManager.sendMockIncomingCall(callerName: callerName, phoneNumber: phoneNumber)
+    }
+
+    func sendTestFileTransfer(
+        sizeBytes: Int = 100 * 1024,
+        onProgress: @escaping (Double) -> Void,
+        completion: @escaping (Result<Double, Error>) -> Void
+    ) {
+        serverManager.sendTestFileTransfer(sizeBytes: sizeBytes, onProgress: onProgress, completion: completion)
+    }
+
+    func sendTestReplyLoopback(
+        message: String = "Hello from iPhone Diagnostics!",
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
+        serverManager.sendTestReplyLoopback(message: message, completion: completion)
+    }
+
+    func clearPacketLogs() {
+        serverManager.multiplexer.clearLogs()
+    }
+
+    func refreshRssi() {
+        peripheralManager.refreshConnectedWatches()
     }
 }

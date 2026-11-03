@@ -82,6 +82,7 @@ fun HomeScreen(
     val activeNotifs by viewModel.activeNotifications.collectAsState()
     val watchBattery by viewModel.watchBatteryLevel.collectAsState()
     val isCharging by viewModel.isWatchCharging.collectAsState()
+    val otaState by viewModel.otaState.collectAsState()
 
     ScalingLazyColumn(
         modifier = Modifier.fillMaxSize(),

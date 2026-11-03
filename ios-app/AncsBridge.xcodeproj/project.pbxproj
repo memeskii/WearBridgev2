@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A1E300114C6F4E8A9B2D7F11 /* BLEPacketMultiplexer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E300104C6F4E8A9B2D7F10 /* BLEPacketMultiplexer.swift */; };
+		A1E300214C6F4E8A9B2D7F21 /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E300204C6F4E8A9B2D7F20 /* DiagnosticsView.swift */; };
 		A1E300024C6F4E8A9B2D7F02 /* BLEServerManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E300014C6F4E8A9B2D7F01 /* BLEServerManager.swift */; };
 		A1E300044C6F4E8A9B2D7F04 /* HealthKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E300034C6F4E8A9B2D7F03 /* HealthKitManager.swift */; };
 		0C1339CAF49308EE12D67173 /* BLEViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B64A6B42E55DCF830BD9501 /* BLEViewModel.swift */; };
@@ -39,6 +41,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		A1E300104C6F4E8A9B2D7F10 /* BLEPacketMultiplexer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLEPacketMultiplexer.swift; sourceTree = "<group>"; };
+		A1E300204C6F4E8A9B2D7F20 /* DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
 		A1E300014C6F4E8A9B2D7F01 /* BLEServerManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLEServerManager.swift; sourceTree = "<group>"; };
 		A1E300034C6F4E8A9B2D7F03 /* HealthKitManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthKitManager.swift; sourceTree = "<group>"; };
 		03B56BE4BCAB856A9AFE50DB /* HowItWorksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HowItWorksView.swift; sourceTree = "<group>"; };
@@ -100,6 +104,7 @@
 				0C4E6DA939E59F8521934572 /* QuickReplySettingsView.swift */,
 				BE23C48EE7171805E83E7C74 /* SettingsView.swift */,
 				076673E488AFB468ED2E2EF9 /* StatusView.swift */,
+				A1E300204C6F4E8A9B2D7F20 /* DiagnosticsView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -144,6 +149,7 @@
 			children = (
 				4027EE6B08DD2500C1BF6E94 /* BLEConstants.swift */,
 				A1E300014C6F4E8A9B2D7F01 /* BLEServerManager.swift */,
+				A1E300104C6F4E8A9B2D7F10 /* BLEPacketMultiplexer.swift */,
 				DDDD1DF5401A97F3ECA524FC /* CallStateObserver.swift */,
 				4CD7E830A5834A54112C3678 /* PeripheralManager.swift */,
 			);
@@ -260,6 +266,8 @@
 				9B3BB8D8B67A12F25A4D6F26 /* AncsBridgeApp.swift in Sources */,
 				0D89D3ECFF7D0E5DF95C362D /* BLEConstants.swift in Sources */,
 				A1E300024C6F4E8A9B2D7F02 /* BLEServerManager.swift in Sources */,
+				A1E300114C6F4E8A9B2D7F11 /* BLEPacketMultiplexer.swift in Sources */,
+				A1E300214C6F4E8A9B2D7F21 /* DiagnosticsView.swift in Sources */,
 				0C1339CAF49308EE12D67173 /* BLEViewModel.swift in Sources */,
 				3444128F7B515916482238DB /* CallStateObserver.swift in Sources */,
 				BAF4F26B9E9AC17651F796F1 /* ConnectionState.swift in Sources */,
@@ -454,14 +462,14 @@
 				CODE_SIGN_ENTITLEMENTS = AncsBridge/AncsBridge.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = R68RHN3HF5;
 				INFOPLIST_FILE = "AncsBridge/Info-Generated.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.wearos.ancsbridge.companion;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.9;
@@ -477,14 +485,14 @@
 				CODE_SIGN_ENTITLEMENTS = AncsBridge/AncsBridge.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Distribution";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = R68RHN3HF5;
 				INFOPLIST_FILE = "AncsBridge/Info-Generated.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.wearos.ancsbridge.companion;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.9;
@@ -526,3 +534,4 @@
 	};
 	rootObject = 31E575607C4A078EEBA50882 /* Project object */;
 }
+

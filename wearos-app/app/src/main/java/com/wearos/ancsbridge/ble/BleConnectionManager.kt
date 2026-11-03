@@ -1,14 +1,20 @@
 package com.wearos.ancsbridge.ble
 
 import android.annotation.SuppressLint
+import android.app.NotificationManager
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.content.Context
+import android.content.Intent
 import android.util.Log
+import androidx.core.app.NotificationCompat
+import com.wearos.ancsbridge.AncsApplication
+import com.wearos.ancsbridge.R
 import com.wearos.ancsbridge.model.ConnectionState
+import com.wearos.ancsbridge.ui.IncomingCallActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -21,12 +27,14 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 import java.util.LinkedList
 
 /**
  * Manages the BLE GATT connection to an iPhone and the ANCS subscription lifecycle.
  *
  * Flow: connect → bond → discover services → subscribe DS → subscribe NS → active
+ * Integrated with BLEPacketMultiplexer for MTU-aware multiplexed framing and diagnostics.
  */
 @SuppressLint("MissingPermission")
 class BleConnectionManager(private val context: Context) {
@@ -52,6 +60,12 @@ class BleConnectionManager(private val context: Context) {
 
     private val _callStateEvents = MutableSharedFlow<ByteArray>(extraBufferCapacity = 16)
     val callStateEvents: SharedFlow<ByteArray> = _callStateEvents.asSharedFlow()
+
+    var negotiatedMtu: Int = TARGET_MTU
+        private set
+
+    // BLE Packet Multiplexer instance
+    val multiplexer = BLEPacketMultiplexer()
 
     private var gatt: BluetoothGatt? = null
     private var targetDevice: BluetoothDevice? = null
@@ -80,10 +94,18 @@ class BleConnectionManager(private val context: Context) {
     private var controlPointChar: BluetoothGattCharacteristic? = null
     private var dataSourceChar: BluetoothGattCharacteristic? = null
 
+    init {
+        multiplexer.outboundChunkWriter = { chunk ->
+            enqueueCompanionWrite(chunk)
+        }
+        multiplexer.onPayloadReceived = { channel, payload ->
+            handleMultiplexerPayload(channel, payload)
+        }
+    }
+
     val bondStateReceiver = BondStateReceiver(
         onBonded = { device ->
             Log.i(TAG, "Bond completed, re-discovering services")
-            // Small delay after bonding before service discovery
             scope.launch {
                 delay(1000)
                 gatt?.discoverServices()
@@ -133,7 +155,6 @@ class BleConnectionManager(private val context: Context) {
                     gatt.device.createBond()
                 } else {
                     // Bonded but ANCS still not visible — retry once, then give up
-                    // (this device may not be an iPhone)
                     serviceDiscoveryRetries++
                     if (serviceDiscoveryRetries <= MAX_SERVICE_DISCOVERY_RETRIES) {
                         Log.w(TAG, "Bonded but ANCS not found, retry $serviceDiscoveryRetries/$MAX_SERVICE_DISCOVERY_RETRIES")
@@ -181,8 +202,7 @@ class BleConnectionManager(private val context: Context) {
                 return@GattCallback
             }
 
-            // Subscribe to Data Source FIRST (Apple recommendation),
-            // then Notification Source
+            // Subscribe to Data Source FIRST (Apple recommendation), then Notification Source
             subscribeToCharacteristic(dataSourceChar!!)
         },
         onNotificationSourceChanged = { data ->
@@ -213,10 +233,12 @@ class BleConnectionManager(private val context: Context) {
                     readGapDeviceName()
                     // Read companion status to notify iPhone app
                     readCompanionStatus()
-                    // Subscribe to call state from companion app (if available)
+                    // Subscribe to call state & companion characteristic from companion app
                     scope.launch {
-                        delay(500) // Small delay to avoid GATT queue congestion
+                        delay(500)
                         subscribeToCallState()
+                        delay(300)
+                        subscribeToCompanionCharacteristic()
                     }
                 }
             }
@@ -236,6 +258,7 @@ class BleConnectionManager(private val context: Context) {
         },
         onMtuChanged = { mtu, status ->
             Log.i(TAG, "MTU negotiated: $mtu (status=$status)")
+            negotiatedMtu = mtu
             // After MTU negotiation, discover services
             gatt?.discoverServices()
         },
@@ -244,14 +267,91 @@ class BleConnectionManager(private val context: Context) {
         },
         onCallStateChanged = { data ->
             _callStateEvents.tryEmit(data)
+        },
+        onCompanionDataReceived = { data ->
+            handleCompanionData(data)
         }
     )
+
+    // MARK: - Inbound Multiplexer Handlers
+    private fun handleCompanionData(data: ByteArray) {
+        if (BLEPacketMultiplexer.isMultiplexedPacket(data)) {
+            multiplexer.processIncomingChunk(data)
+        } else {
+            Log.d(TAG, "Non-multiplexed data received on companion characteristic: ${data.size} bytes")
+        }
+    }
+
+    private fun handleMultiplexerPayload(channel: Byte, payload: ByteArray) {
+        when (channel) {
+            BLEPacketMultiplexer.CHANNEL_PING_CONTROL -> {
+                val str = String(payload, Charsets.UTF_8)
+                Log.i(TAG, "Multiplexer Ping/Control payload: $str")
+                if (str.contains("\"type\":\"call_state\"") || str.contains("RINGING")) {
+                    handleMockCallState(str)
+                } else if (str.contains("\"type\":\"alert\"")) {
+                    handleAlertPacket(str)
+                }
+            }
+            BLEPacketMultiplexer.CHANNEL_MESSAGE_REPLY -> {
+                Log.i(TAG, "Multiplexer Reply received: ${payload.size} bytes")
+            }
+            BLEPacketMultiplexer.CHANNEL_BINARY_FILE -> {
+                Log.i(TAG, "Multiplexer File received and verified: ${payload.size} bytes")
+            }
+        }
+    }
+
+    private fun handleMockCallState(jsonStr: String) {
+        try {
+            val json = JSONObject(jsonStr)
+            val callerName = json.optString("callerName", "Jane Doe")
+            val phoneNumber = json.optString("phoneNumber", "+1 (555) 019-2834")
+            val state = json.optString("state", "RINGING")
+
+            if (state.equals("RINGING", ignoreCase = true)) {
+                val callIntent = Intent(context, IncomingCallActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                            Intent.FLAG_ACTIVITY_NO_USER_ACTION or
+                            Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                    putExtra(IncomingCallActivity.EXTRA_CALLER_NAME, callerName)
+                    putExtra(IncomingCallActivity.EXTRA_NOTIFICATION_UID, 999999L)
+                    putExtra(IncomingCallActivity.EXTRA_APP_NAME, "Phone")
+                }
+                context.startActivity(callIntent)
+                Log.i(TAG, "Triggered IncomingCallActivity for mock call: $callerName ($phoneNumber)")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error handling mock call state: ${e.message}")
+        }
+    }
+
+    private fun handleAlertPacket(jsonStr: String) {
+        try {
+            val json = JSONObject(jsonStr)
+            val title = json.optString("title", "Diagnostics Alert")
+            val message = json.optString("message", "Custom GATT Alert")
+            Log.i(TAG, "Received Alert Packet: $title - $message")
+
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            val notification = NotificationCompat.Builder(context, AncsApplication.CHANNEL_OTHER)
+                .setSmallIcon(R.drawable.ic_notification_default)
+                .setContentTitle(title)
+                .setContentText(message)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .build()
+            notificationManager?.notify(8888, notification)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error handling alert packet: ${e.message}")
+        }
+    }
 
     /**
      * Connect to a BLE device (iPhone).
      */
     fun connect(device: BluetoothDevice, autoReconnect: Boolean = true) {
-        // Guard: skip if already connected or connecting to this device
         val currentState = _connectionState.value
         if (gatt != null && gatt?.device?.address == device.address &&
             (currentState is ConnectionState.Connected || currentState is ConnectionState.Connecting)) {
@@ -269,7 +369,7 @@ class BleConnectionManager(private val context: Context) {
         gatt?.close()
         gatt = device.connectGatt(
             context,
-            false, // autoConnect=false for faster initial connection
+            false,
             gattCallback,
             BluetoothDevice.TRANSPORT_LE
         )
@@ -279,7 +379,6 @@ class BleConnectionManager(private val context: Context) {
      * Reconnect to a previously bonded device using autoConnect.
      */
     fun reconnect(device: BluetoothDevice) {
-        // Guard: skip if already connected or connecting to this device
         val currentState = _connectionState.value
         if (gatt != null && gatt?.device?.address == device.address &&
             (currentState is ConnectionState.Connected || currentState is ConnectionState.Connecting)) {
@@ -297,7 +396,7 @@ class BleConnectionManager(private val context: Context) {
         gatt?.close()
         gatt = device.connectGatt(
             context,
-            true, // autoConnect=true uses chipset whitelist, battery efficient
+            true,
             gattCallback,
             BluetoothDevice.TRANSPORT_LE
         )
@@ -318,25 +417,15 @@ class BleConnectionManager(private val context: Context) {
     /** Cached real device name read from GAP characteristic */
     private var cachedDeviceName: String? = null
 
-    /**
-     * Resolve a user-friendly device name from the bonded device list or GATT connection.
-     * BLE advertised names are often truncated (e.g., "AncsBrid" instead of "iPhone").
-     */
     private fun resolveDeviceName(): String {
-        // Return cached GAP name if available
         cachedDeviceName?.let { return it }
-
-        // Check bonded devices for a full name
         val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         val adapter = bluetoothManager.adapter
         val bondedName = adapter?.bondedDevices?.firstOrNull { device ->
             device.address == gatt?.device?.address
         }?.name
 
-        // Prefer the bonded name, fall back to GATT device name
         val rawName = bondedName ?: gatt?.device?.name ?: "iPhone"
-
-        // If the name is a truncated BLE name, show "iPhone" instead
         return if (isTruncatedBleName(rawName)) "iPhone" else rawName
     }
 
@@ -347,11 +436,6 @@ class BleConnectionManager(private val context: Context) {
             name.startsWith("WearBridge", ignoreCase = true)
     }
 
-    /**
-     * Read the real device name from the GAP (Generic Access Profile) service.
-     * The Device Name characteristic (0x2A00) contains the actual iPhone name
-     * (e.g., "Karthik's iPhone Max") rather than the truncated BLE advertising name.
-     */
     fun readGapDeviceName() {
         val gatt = this.gatt ?: return
         val gapServiceUuid = java.util.UUID.fromString("00001800-0000-1000-8000-00805f9b34fb")
@@ -362,10 +446,6 @@ class BleConnectionManager(private val context: Context) {
         Log.i(TAG, "Reading GAP Device Name characteristic")
     }
 
-    /**
-     * Called from GattCallback when a characteristic read completes.
-     * If it's the GAP Device Name, cache and broadcast it.
-     */
     fun onCharacteristicRead(characteristicUuid: java.util.UUID, value: ByteArray) {
         val deviceNameUuid = java.util.UUID.fromString("00002A00-0000-1000-8000-00805f9b34fb")
         if (characteristicUuid == deviceNameUuid) {
@@ -379,13 +459,8 @@ class BleConnectionManager(private val context: Context) {
         }
     }
 
-    /** Callback to notify the UI when the real device name is resolved */
     var onDeviceNameResolved: ((String) -> Unit)? = null
 
-    /**
-     * Read the companion app's status characteristic to notify the iPhone app
-     * that the watch has connected. This triggers didReceiveRead on the iOS side.
-     */
     private fun findCompanionCharacteristic(): BluetoothGattCharacteristic? {
         val gatt = this.gatt ?: return null
         val service = gatt.getService(AncsConstants.COMPANION_SERVICE_UUID)
@@ -413,10 +488,6 @@ class BleConnectionManager(private val context: Context) {
         }
     }
 
-    /**
-     * Read the companion app's status characteristic to notify the iPhone app
-     * that the watch has connected. This triggers didReceiveRead on the iOS side.
-     */
     private fun readCompanionStatus() {
         val gatt = this.gatt ?: return
         val companionServiceUuid = AncsConstants.COMPANION_SERVICE_UUID
@@ -436,10 +507,6 @@ class BleConnectionManager(private val context: Context) {
         }
     }
 
-    /**
-     * Subscribe to the call state characteristic from the iOS companion app.
-     * When enabled, the companion pushes real-time call state (ringing/active/ended).
-     */
     fun subscribeToCallState() {
         val gatt = this.gatt ?: return
         val service = gatt.getService(AncsConstants.COMPANION_SERVICE_UUID) ?: run {
@@ -454,11 +521,22 @@ class BleConnectionManager(private val context: Context) {
         Log.i(TAG, "Subscribing to call state characteristic")
     }
 
+    fun subscribeToCompanionCharacteristic() {
+        val gatt = this.gatt ?: return
+        val service = gatt.getService(AncsConstants.COMPANION_SERVICE_UUID) ?: run {
+            Log.d(TAG, "subscribeToCompanionCharacteristic: companion service not found")
+            return
+        }
+        val char = service.getCharacteristic(AncsConstants.QUICK_REPLY_CHARACTERISTIC_UUID) ?: run {
+            Log.d(TAG, "subscribeToCompanionCharacteristic: quick reply characteristic not found")
+            return
+        }
+        subscribeToCharacteristic(char)
+        Log.i(TAG, "Subscribing to companion multiplexer characteristic 7F8A0003")
+    }
+
     // MARK: - Outbound Characteristic Writes (Quick Reply, Battery, Health)
 
-    /**
-     * Enqueue and serialize an outbound characteristic write to the iOS Companion App.
-     */
     @Synchronized
     private fun enqueueCompanionWrite(payload: ByteArray): Boolean {
         if (gatt == null) {
@@ -516,10 +594,8 @@ class BleConnectionManager(private val context: Context) {
         val nextPayload = characteristicWriteQueue.poll() ?: return
 
         isWritingCharacteristic = true
-        val payloadStr = String(nextPayload, Charsets.UTF_8)
-        Log.i(TAG, "processCharacteristicWriteQueue: Dispatching write '${payloadStr.take(30)}' (${nextPayload.size} bytes)")
+        Log.i(TAG, "processCharacteristicWriteQueue: Dispatching write (${nextPayload.size} bytes)")
 
-        // 2500ms watchdog to ensure write queue never locks up if ACK is missed
         writeWatchdogJob?.cancel()
         writeWatchdogJob = scope.launch {
             delay(2500)
@@ -560,6 +636,19 @@ class BleConnectionManager(private val context: Context) {
     }
 
     /**
+     * Send multiplexed quick reply.
+     */
+    fun sendMultiplexedQuickReply(notificationUid: Int, replyText: String): Boolean {
+        val payload = "{\"type\":\"reply\",\"uid\":$notificationUid,\"message\":\"$replyText\"}".toByteArray(Charsets.UTF_8)
+        val chunks = multiplexer.createChunks(BLEPacketMultiplexer.CHANNEL_MESSAGE_REPLY, payload, (negotiatedMtu - 3).coerceAtLeast(20))
+        var success = true
+        for (chunk in chunks) {
+            if (!enqueueCompanionWrite(chunk)) success = false
+        }
+        return success
+    }
+
+    /**
      * Send real-time battery telemetry to iOS Companion App.
      * Format: "BATT:<level>:<1|0>" over characteristic 7F8A0003-9B3C-4D2A-B9E1-8C5F6D7E8A01.
      */
@@ -576,6 +665,16 @@ class BleConnectionManager(private val context: Context) {
     fun sendHealthTelemetry(steps: Int, heartRateBpm: Int, activeKcal: Int): Boolean {
         val payload = "HEALTH:$steps:$heartRateBpm:$activeKcal".toByteArray(Charsets.UTF_8)
         return enqueueCompanionWrite(payload)
+    }
+
+    /**
+     * Send standardized Health Telemetry JSON schema to Companion App.
+     * Format: "HEALTH_JSON:<json>" over characteristic 7F8A0003-9B3C-4D2A-B9E1-8C5F6D7E8A01.
+     */
+    fun sendHealthTelemetry(payload: com.wearos.ancsbridge.health.HealthTelemetryPayload): Boolean {
+        val jsonStr = payload.toJson()
+        val data = "HEALTH_JSON:$jsonStr".toByteArray(Charsets.UTF_8)
+        return enqueueCompanionWrite(data)
     }
 
     /**
@@ -597,9 +696,6 @@ class BleConnectionManager(private val context: Context) {
         _connectionState.value = ConnectionState.Idle
     }
 
-    /**
-     * Get the bonded iPhone device if one exists.
-     */
     fun getBondedIPhone(): BluetoothDevice? {
         val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         val adapter = bluetoothManager.adapter ?: return null
@@ -628,7 +724,6 @@ class BleConnectionManager(private val context: Context) {
 
         descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
 
-        // Queue the write since BLE only allows one outstanding GATT operation at a time
         descriptorWriteQueue.add(characteristic to descriptor)
         if (!isWritingDescriptor) {
             processDescriptorWriteQueue()

@@ -357,7 +357,7 @@ struct StatusView: View {
     private var watchHealthCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Label("Watch Health & Activity", systemImage: "heart.fill")
+                Label("Watch Health & Telemetry", systemImage: "heart.fill")
                     .font(.subheadline)
                     .fontWeight(.semibold)
                     .foregroundColor(.pink)
@@ -371,7 +371,8 @@ struct StatusView: View {
                 }
             }
 
-            HStack(spacing: 10) {
+            // Metric Row 1: Steps, Heart Rate, SpO2
+            HStack(spacing: 8) {
                 // Steps
                 statusHealthTile(
                     icon: "figure.walk",
@@ -388,12 +389,43 @@ struct StatusView: View {
                     label: "BPM"
                 )
 
-                // Active kcal
+                // SpO2
+                statusHealthTile(
+                    icon: "lungs.fill",
+                    color: .blue,
+                    value: viewModel.watchBloodOxygen != nil ? "\(viewModel.watchBloodOxygen!)%" : "--%",
+                    label: "SpO2"
+                )
+            }
+
+            // Metric Row 2: Calories, Stress, Sleep
+            HStack(spacing: 8) {
+                // Calories
                 statusHealthTile(
                     icon: "flame.fill",
                     color: .orange,
-                    value: viewModel.watchActiveCalories > 0 ? "\(viewModel.watchActiveCalories)" : "--",
-                    label: "Active kcal"
+                    value: (viewModel.watchTotalCalories > 0 ? viewModel.watchTotalCalories : viewModel.watchActiveCalories) > 0
+                        ? "\((viewModel.watchTotalCalories > 0 ? viewModel.watchTotalCalories : viewModel.watchActiveCalories))"
+                        : "--",
+                    label: "Total kcal"
+                )
+
+                // Stress
+                statusHealthTile(
+                    icon: "waveform.path.ecg",
+                    color: .purple,
+                    value: viewModel.watchStressLevel != nil ? "\(viewModel.watchStressLevel!)" : "--",
+                    label: "Stress"
+                )
+
+                // Sleep
+                statusHealthTile(
+                    icon: "moon.stars.fill",
+                    color: .indigo,
+                    value: viewModel.watchSleepDurationMinutes != nil
+                        ? "\(viewModel.watchSleepDurationMinutes! / 60)h \(viewModel.watchSleepDurationMinutes! % 60)m"
+                        : "--",
+                    label: viewModel.watchSleepStatus?.capitalized ?? "Sleep"
                 )
             }
         }

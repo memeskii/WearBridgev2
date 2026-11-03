@@ -42,6 +42,22 @@ struct SettingsView: View {
                         viewModel.peripheralManager.settingsStore.liveCallStatus = newValue
                         viewModel.peripheralManager.updateCallStateObserving()
                     }
+
+                    NavigationLink {
+                        DiagnosticsView()
+                    } label: {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Hardware Diagnostics")
+                                Text("Test multiplexer, ping latency, file transfer & logs")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "wrench.and.screwdriver")
+                                .foregroundColor(.purple)
+                        }
+                    }
                 }
 
                 // About

@@ -1,6 +1,7 @@
 package com.wearos.ancsbridge.ble
 
 import android.annotation.SuppressLint
+import android.app.NotificationManager
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCharacteristic
@@ -8,9 +9,14 @@ import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothStatusCodes
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.util.Log
+import androidx.core.app.NotificationCompat
+import com.wearos.ancsbridge.AncsApplication
+import com.wearos.ancsbridge.R
 import com.wearos.ancsbridge.model.ConnectionState
+import com.wearos.ancsbridge.ui.IncomingCallActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -23,22 +29,14 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 import java.util.LinkedList
 import java.util.UUID
 
 /**
  * Full ANCS & Companion BLE GATT Client Service for Wear OS.
  *
- * Manages the complete ANCS lifecycle:
- * - BLE connection & auto-reconnect with exponential backoff
- * - Bluetooth bonding with iOS device
- * - MTU negotiation (512 bytes)
- * - ANCS service discovery
- * - Serialized CCCD descriptor subscription (Data Source first, then Notification Source)
- * - Notification Source & Data Source event streaming
- * - Control Point command writes
- * - GAP device name resolution
- * - Quick Reply BLE Transport over custom characteristic 7F8A0003-9B3C-4D2A-B9E1-8C5F6D7E8A01
+ * Upgraded to integrate BLEPacketMultiplexer for MTU-aware multiplexed framing and diagnostics.
  */
 @SuppressLint("MissingPermission")
 class BLEClientService(private val context: Context) {
@@ -77,6 +75,12 @@ class BLEClientService(private val context: Context) {
     private val _callStateEvents = MutableSharedFlow<ByteArray>(extraBufferCapacity = 16)
     val callStateEvents: SharedFlow<ByteArray> = _callStateEvents.asSharedFlow()
 
+    var negotiatedMtu: Int = TARGET_MTU
+        private set
+
+    // BLE Packet Multiplexer instance
+    val multiplexer = BLEPacketMultiplexer()
+
     private var gatt: BluetoothGatt? = null
     private var targetDevice: BluetoothDevice? = null
     private var reconnectJob: Job? = null
@@ -105,9 +109,15 @@ class BLEClientService(private val context: Context) {
     val isConnected: Boolean
         get() = _connectionState.value is ConnectionState.Connected
 
-    /**
-     * Receiver to handle Bluetooth bonding events.
-     */
+    init {
+        multiplexer.outboundChunkWriter = { chunk ->
+            enqueueCompanionWrite(chunk)
+        }
+        multiplexer.onPayloadReceived = { channel, payload ->
+            handleMultiplexerPayload(channel, payload)
+        }
+    }
+
     val bondStateReceiver = BondStateReceiver(
         onBonded = { device ->
             Log.i(TAG, "Bond completed with ${device.address}, re-discovering services...")
@@ -179,11 +189,9 @@ class BLEClientService(private val context: Context) {
                 return@GattCallback
             }
 
-            // ANCS service found
             Log.i(TAG, "ANCS service discovered successfully!")
             serviceDiscoveryRetries = 0
 
-            // If already subscribed (e.g. secondary discovery for companion), skip re-subscribing
             if (notificationSourceChar != null && dataSourceChar != null) {
                 Log.i(TAG, "ANCS already subscribed; checking companion service status")
                 readCompanionStatus()
@@ -200,7 +208,6 @@ class BLEClientService(private val context: Context) {
                 return@GattCallback
             }
 
-            // Apple ANCS Spec: Subscribe to Data Source FIRST, then Notification Source
             subscribeToCharacteristic(dataSourceChar!!)
         },
         onNotificationSourceChanged = { data ->
@@ -230,6 +237,8 @@ class BLEClientService(private val context: Context) {
                     scope.launch {
                         delay(500)
                         subscribeToCallState()
+                        delay(300)
+                        subscribeToCompanionCharacteristic()
                     }
                 }
             }
@@ -248,6 +257,7 @@ class BLEClientService(private val context: Context) {
         },
         onMtuChanged = { mtu, status ->
             Log.i(TAG, "MTU negotiated: $mtu (status=$status). Discovering services...")
+            negotiatedMtu = mtu
             gatt?.discoverServices()
         },
         onCharacteristicReadCallback = { characteristic, value ->
@@ -255,8 +265,85 @@ class BLEClientService(private val context: Context) {
         },
         onCallStateChanged = { data ->
             _callStateEvents.tryEmit(data)
+        },
+        onCompanionDataReceived = { data ->
+            handleCompanionData(data)
         }
     )
+
+    private fun handleCompanionData(data: ByteArray) {
+        if (BLEPacketMultiplexer.isMultiplexedPacket(data)) {
+            multiplexer.processIncomingChunk(data)
+        } else {
+            Log.d(TAG, "Non-multiplexed data received on companion characteristic: ${data.size} bytes")
+        }
+    }
+
+    private fun handleMultiplexerPayload(channel: Byte, payload: ByteArray) {
+        when (channel) {
+            BLEPacketMultiplexer.CHANNEL_PING_CONTROL -> {
+                val str = String(payload, Charsets.UTF_8)
+                Log.i(TAG, "Multiplexer Ping/Control payload: $str")
+                if (str.contains("\"type\":\"call_state\"") || str.contains("RINGING")) {
+                    handleMockCallState(str)
+                } else if (str.contains("\"type\":\"alert\"")) {
+                    handleAlertPacket(str)
+                }
+            }
+            BLEPacketMultiplexer.CHANNEL_MESSAGE_REPLY -> {
+                Log.i(TAG, "Multiplexer Reply received: ${payload.size} bytes")
+            }
+            BLEPacketMultiplexer.CHANNEL_BINARY_FILE -> {
+                Log.i(TAG, "Multiplexer File received and verified: ${payload.size} bytes")
+            }
+        }
+    }
+
+    private fun handleMockCallState(jsonStr: String) {
+        try {
+            val json = JSONObject(jsonStr)
+            val callerName = json.optString("callerName", "Jane Doe")
+            val phoneNumber = json.optString("phoneNumber", "+1 (555) 019-2834")
+            val state = json.optString("state", "RINGING")
+
+            if (state.equals("RINGING", ignoreCase = true)) {
+                val callIntent = Intent(context, IncomingCallActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                            Intent.FLAG_ACTIVITY_NO_USER_ACTION or
+                            Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                    putExtra(IncomingCallActivity.EXTRA_CALLER_NAME, callerName)
+                    putExtra(IncomingCallActivity.EXTRA_NOTIFICATION_UID, 999999L)
+                    putExtra(IncomingCallActivity.EXTRA_APP_NAME, "Phone")
+                }
+                context.startActivity(callIntent)
+                Log.i(TAG, "Triggered IncomingCallActivity for mock call: $callerName ($phoneNumber)")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error handling mock call state: ${e.message}")
+        }
+    }
+
+    private fun handleAlertPacket(jsonStr: String) {
+        try {
+            val json = JSONObject(jsonStr)
+            val title = json.optString("title", "Diagnostics Alert")
+            val message = json.optString("message", "Custom GATT Alert")
+            Log.i(TAG, "Received Alert Packet: $title - $message")
+
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            val notification = NotificationCompat.Builder(context, AncsApplication.CHANNEL_OTHER)
+                .setSmallIcon(R.drawable.ic_notification_default)
+                .setContentTitle(title)
+                .setContentText(message)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .build()
+            notificationManager?.notify(8888, notification)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error handling alert packet: ${e.message}")
+        }
+    }
 
     // MARK: - Connection Methods
 
@@ -330,9 +417,6 @@ class BLEClientService(private val context: Context) {
 
     // MARK: - ANCS Control Point
 
-    /**
-     * Write to the ANCS Control Point characteristic.
-     */
     fun writeControlPoint(data: ByteArray): Boolean {
         val gatt = this.gatt ?: return false
         val char = controlPointChar ?: return false
@@ -342,11 +426,8 @@ class BLEClientService(private val context: Context) {
         return gatt.writeCharacteristic(char)
     }
 
-    // MARK: - Outbound Characteristic Writes (Quick Reply, Battery, Health)
+    // MARK: - Outbound Characteristic Writes
 
-    /**
-     * Enqueue and serialize an outbound characteristic write to the iOS Companion App.
-     */
     @Synchronized
     private fun enqueueCompanionWrite(payload: ByteArray): Boolean {
         if (gatt == null) {
@@ -354,7 +435,6 @@ class BLEClientService(private val context: Context) {
             return false
         }
 
-        // Deduplicate BATT and HEALTH telemetry payloads to prevent stale queue accumulation
         val prefix = when {
             payload.startsWith("BATT:".toByteArray(Charsets.UTF_8)) -> "BATT:"
             payload.startsWith("HEALTH:".toByteArray(Charsets.UTF_8)) -> "HEALTH:"
@@ -408,10 +488,8 @@ class BLEClientService(private val context: Context) {
         val nextPayload = characteristicWriteQueue.poll() ?: return
 
         isWritingCharacteristic = true
-        val payloadStr = String(nextPayload, Charsets.UTF_8)
-        Log.i(TAG, "processCharacteristicWriteQueue: Dispatching write '${payloadStr.take(30)}' (${nextPayload.size} bytes)")
+        Log.i(TAG, "processCharacteristicWriteQueue: Dispatching write (${nextPayload.size} bytes)")
 
-        // 2500ms watchdog to ensure write queue never locks up if ACK is missed
         writeWatchdogJob?.cancel()
         writeWatchdogJob = scope.launch {
             delay(2500)
@@ -446,32 +524,36 @@ class BLEClientService(private val context: Context) {
         }
     }
 
-    /**
-     * Transmit a canned quick reply back to the iOS Companion App.
-     * Payload format: "REPLY:<UID>:<TEXT>"
-     */
     fun sendQuickReply(notificationUid: Int, replyText: String): Boolean {
         val payload = "REPLY:$notificationUid:$replyText".toByteArray(Charsets.UTF_8)
         return enqueueCompanionWrite(payload)
     }
 
-    /**
-     * Transmit real-time battery and charging status to the iOS Companion App.
-     * Payload format: "BATT:<level>:<1|0>"
-     */
+    fun sendMultiplexedQuickReply(notificationUid: Int, replyText: String): Boolean {
+        val payload = "{\"type\":\"reply\",\"uid\":$notificationUid,\"message\":\"$replyText\"}".toByteArray(Charsets.UTF_8)
+        val chunks = multiplexer.createChunks(BLEPacketMultiplexer.CHANNEL_MESSAGE_REPLY, payload, (negotiatedMtu - 3).coerceAtLeast(20))
+        var success = true
+        for (chunk in chunks) {
+            if (!enqueueCompanionWrite(chunk)) success = false
+        }
+        return success
+    }
+
     fun sendBatteryTelemetry(batteryPct: Int, isCharging: Boolean): Boolean {
         val chargingFlag = if (isCharging) 1 else 0
         val payload = "BATT:$batteryPct:$chargingFlag".toByteArray(Charsets.UTF_8)
         return enqueueCompanionWrite(payload)
     }
 
-    /**
-     * Transmit real-time health data (steps, heart rate BPM, active calories) to iOS Companion App.
-     * Payload format: "HEALTH:<steps>:<heartRateBpm>:<activeKcal>"
-     */
     fun sendHealthTelemetry(steps: Int, heartRateBpm: Int, activeKcal: Int): Boolean {
         val payload = "HEALTH:$steps:$heartRateBpm:$activeKcal".toByteArray(Charsets.UTF_8)
         return enqueueCompanionWrite(payload)
+    }
+
+    fun sendHealthTelemetry(payload: com.wearos.ancsbridge.health.HealthTelemetryPayload): Boolean {
+        val jsonStr = payload.toJson()
+        val data = "HEALTH_JSON:$jsonStr".toByteArray(Charsets.UTF_8)
+        return enqueueCompanionWrite(data)
     }
 
     // MARK: - Helper Methods & Subscriptions
@@ -527,6 +609,13 @@ class BLEClientService(private val context: Context) {
         val gatt = this.gatt ?: return
         val service = gatt.getService(COMPANION_SERVICE_UUID) ?: return
         val char = service.getCharacteristic(CALL_STATE_CHARACTERISTIC_UUID) ?: return
+        subscribeToCharacteristic(char)
+    }
+
+    fun subscribeToCompanionCharacteristic() {
+        val gatt = this.gatt ?: return
+        val service = gatt.getService(COMPANION_SERVICE_UUID) ?: return
+        val char = service.getCharacteristic(QUICK_REPLY_CHARACTERISTIC_UUID) ?: return
         subscribeToCharacteristic(char)
     }
 

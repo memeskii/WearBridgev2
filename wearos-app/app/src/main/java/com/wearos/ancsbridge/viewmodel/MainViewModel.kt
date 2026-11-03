@@ -39,6 +39,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val watchBatteryLevel: StateFlow<Int?> = AncsService.watchBatteryLevel
     val isWatchCharging: StateFlow<Boolean> = AncsService.isWatchCharging
 
+    // In-App OTA Update Manager
+    val otaManager = com.wearos.ancsbridge.ota.OtaUpdateManager(application)
+    val otaState = otaManager.otaState
+
+    fun checkForUpdates(url: String? = null) {
+        viewModelScope.launch {
+            otaManager.downloadAndInstallUpdate(url ?: com.wearos.ancsbridge.ota.OtaUpdateManager.DEFAULT_UPDATE_URL)
+        }
+    }
+
+    fun resetOtaState() {
+        otaManager.resetState()
+    }
+
     private val _scanStatus = MutableStateFlow("")
     val scanStatus: StateFlow<String> = _scanStatus.asStateFlow()
 

@@ -9,7 +9,8 @@ import os.log
  * Responsibilities:
  * - Safely verifies HealthKit availability (graceful fallback for free Apple IDs lacking entitlements).
  * - Tracks daily step baselines and commits ONLY positive step deltas to prevent duplicate counting in Apple Health.
- * - Records heart rate (count/min) and incremental active energy burned (kcal).
+ * - Records heart rate (count/min), active energy burned (kcal), basal resting energy (kcal),
+ *   blood oxygen (SpO2 percent), and sleep analysis sessions with stage records.
  */
 class HealthKitManager: ObservableObject {
 
@@ -21,7 +22,8 @@ class HealthKitManager: ObservableObject {
     private let userDefaults = UserDefaults.standard
     private let keyLastSyncedDate = "HealthKit_LastSyncedDate"
     private let keyLastSyncedSteps = "HealthKit_LastSyncedSteps"
-    private let keyLastSyncedKcal = "HealthKit_LastSyncedKcal"
+    private let keyLastSyncedActiveKcal = "HealthKit_LastSyncedActiveKcal"
+    private let keyLastSyncedRestingKcal = "HealthKit_LastSyncedRestingKcal"
 
     @Published var isHealthKitAvailable: Bool = false
     @Published var isAuthorized: Bool = false
@@ -35,7 +37,7 @@ class HealthKitManager: ObservableObject {
     /**
      * Verify whether HealthKit is supported on this device.
      */
-    private func checkAvailability() {
+    private fun checkAvailability() {
         guard HKHealthStore.isHealthDataAvailable() else {
             isHealthKitAvailable = false
             logger.warning("HealthKit is not available on this device")
@@ -47,7 +49,7 @@ class HealthKitManager: ObservableObject {
     }
 
     /**
-     * Request authorization to write steps, heart rate, and active calories.
+     * Request authorization to write steps, heart rate, active calories, resting calories, SpO2, and sleep.
      * Wrapped gracefully to never crash if sideloaded without paid developer entitlements.
      */
     func requestAuthorization() {
@@ -56,15 +58,33 @@ class HealthKitManager: ObservableObject {
             return
         }
 
-        guard let stepType = HKQuantityType.quantityType(forIdentifier: .stepCount),
-              let hrType = HKQuantityType.quantityType(forIdentifier: .heartRate),
-              let energyType = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned) else {
-            logger.error("Failed to construct HealthKit quantity types")
-            return
-        }
+        var writeTypes: Set<HKSampleType> = []
+        var readTypes: Set<HKObjectType> = []
 
-        let writeTypes: Set<HKSampleType> = [stepType, hrType, energyType]
-        let readTypes: Set<HKObjectType> = [stepType, hrType, energyType]
+        if let stepType = HKQuantityType.quantityType(forIdentifier: .stepCount) {
+            writeTypes.insert(stepType)
+            readTypes.insert(stepType)
+        }
+        if let hrType = HKQuantityType.quantityType(forIdentifier: .heartRate) {
+            writeTypes.insert(hrType)
+            readTypes.insert(hrType)
+        }
+        if let activeEnergy = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned) {
+            writeTypes.insert(activeEnergy)
+            readTypes.insert(activeEnergy)
+        }
+        if let basalEnergy = HKQuantityType.quantityType(forIdentifier: .basalEnergyBurned) {
+            writeTypes.insert(basalEnergy)
+            readTypes.insert(basalEnergy)
+        }
+        if let o2Type = HKQuantityType.quantityType(forIdentifier: .oxygenSaturation) {
+            writeTypes.insert(o2Type)
+            readTypes.insert(o2Type)
+        }
+        if let sleepType = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis) {
+            writeTypes.insert(sleepType)
+            readTypes.insert(sleepType)
+        }
 
         healthStore.requestAuthorization(toShare: writeTypes, read: readTypes) { [weak self] success, error in
             DispatchQueue.main.async {
@@ -82,26 +102,58 @@ class HealthKitManager: ObservableObject {
     }
 
     /**
-     * Record incoming health telemetry from the Galaxy Watch:
-     * - Computes step delta for the current calendar day and saves sample.
-     * - Records instantaneous heart rate (BPM).
-     * - Computes active calorie delta and saves sample.
+     * Legacy telemetry update (steps, HR, active calories).
      */
     func recordHealthTelemetry(steps: Int, heartRateBpm: Int, activeKcal: Int) {
+        recordFullHealthTelemetry(
+            steps: steps,
+            heartRateBpm: heartRateBpm,
+            bloodOxygen: 0,
+            stressLevel: 0,
+            activeKcal: activeKcal,
+            restingKcal: 0,
+            sleepStatus: nil,
+            sleepDurationMinutes: nil,
+            sleepEfficiency: nil
+        )
+    }
+
+    /**
+     * Record comprehensive incoming health telemetry from the Galaxy Watch:
+     * - Step delta
+     * - Real-time Heart Rate (BPM)
+     * - Blood Oxygen (SpO2 percentage)
+     * - Active & Resting Calories deltas
+     * - Sleep session analysis
+     */
+    func recordFullHealthTelemetry(
+        steps: Int,
+        heartRateBpm: Int,
+        bloodOxygen: Int,
+        stressLevel: Int,
+        activeKcal: Int,
+        restingKcal: Int,
+        sleepStatus: String?,
+        sleepDurationMinutes: Int?,
+        sleepEfficiency: Int?
+    ) {
         let today = getCurrentDateString()
         let storedDate = userDefaults.string(forKey: keyLastSyncedDate) ?? ""
 
         var lastSyncedSteps = userDefaults.integer(forKey: keyLastSyncedSteps)
-        var lastSyncedKcal = userDefaults.integer(forKey: keyLastSyncedKcal)
+        var lastSyncedActiveKcal = userDefaults.integer(forKey: keyLastSyncedActiveKcal)
+        var lastSyncedRestingKcal = userDefaults.integer(forKey: keyLastSyncedRestingKcal)
 
-        // 1. Midnight rollover check: If a new day has started, reset daily sync baseline
+        // 1. Midnight rollover check: If a new day has started, reset daily sync baselines
         if storedDate != today {
             logger.info("New day detected (\(today)). Resetting HealthKit sync baselines from prior date (\(storedDate))")
             lastSyncedSteps = 0
-            lastSyncedKcal = 0
+            lastSyncedActiveKcal = 0
+            lastSyncedRestingKcal = 0
             userDefaults.set(today, forKey: keyLastSyncedDate)
             userDefaults.set(0, forKey: keyLastSyncedSteps)
-            userDefaults.set(0, forKey: keyLastSyncedKcal)
+            userDefaults.set(0, forKey: keyLastSyncedActiveKcal)
+            userDefaults.set(0, forKey: keyLastSyncedRestingKcal)
         }
 
         // 2. Commit Step Delta to HealthKit
@@ -116,11 +168,30 @@ class HealthKitManager: ObservableObject {
             saveHeartRate(bpm: heartRateBpm)
         }
 
-        // 4. Commit Active Calorie Delta to HealthKit
-        let kcalDelta = activeKcal - lastSyncedKcal
-        if kcalDelta > 0 {
-            saveActiveEnergyDelta(kcalDelta: kcalDelta)
-            userDefaults.set(activeKcal, forKey: keyLastSyncedKcal)
+        // 4. Commit SpO2 Blood Oxygen to HealthKit
+        if bloodOxygen in 70...100 {
+            saveBloodOxygen(percent: bloodOxygen)
+        }
+
+        // 5. Commit Active Calorie Delta to HealthKit
+        let activeKcalDelta = activeKcal - lastSyncedActiveKcal
+        if activeKcalDelta > 0 {
+            saveActiveEnergyDelta(kcalDelta: activeKcalDelta)
+            userDefaults.set(activeKcal, forKey: keyLastSyncedActiveKcal)
+        }
+
+        // 6. Commit Resting Calorie Delta to HealthKit
+        if restingKcal > 0 {
+            let restingKcalDelta = restingKcal - lastSyncedRestingKcal
+            if restingKcalDelta > 0 {
+                saveRestingEnergyDelta(kcalDelta: restingKcalDelta)
+                userDefaults.set(restingKcal, forKey: keyLastSyncedRestingKcal)
+            }
+        }
+
+        // 7. Commit Sleep Analysis to HealthKit
+        if let duration = sleepDurationMinutes, duration > 0 {
+            saveSleepSession(durationMinutes: duration, status: sleepStatus ?? "asleep")
         }
 
         DispatchQueue.main.async {
@@ -134,7 +205,7 @@ class HealthKitManager: ObservableObject {
         guard let stepType = HKQuantityType.quantityType(forIdentifier: .stepCount) else { return }
 
         let now = Date()
-        let start = now.addingTimeInterval(-60) // 1 minute window for incremental delta
+        let start = now.addingTimeInterval(-60)
         let quantity = HKQuantity(unit: .count(), doubleValue: Double(delta))
         let sample = HKQuantitySample(type: stepType, quantity: quantity, start: start, end: now)
 
@@ -165,6 +236,24 @@ class HealthKitManager: ObservableObject {
         }
     }
 
+    private func saveBloodOxygen(percent: Int) {
+        guard isHealthKitAvailable else { return }
+        guard let o2Type = HKQuantityType.quantityType(forIdentifier: .oxygenSaturation) else { return }
+
+        let now = Date()
+        let ratio = Double(percent) / 100.0
+        let quantity = HKQuantity(unit: .percent(), doubleValue: ratio)
+        let sample = HKQuantitySample(type: o2Type, quantity: quantity, start: now, end: now)
+
+        healthStore.save(sample) { [weak self] success, error in
+            if let error = error {
+                self?.logger.warning("Could not write oxygen saturation (\(percent)%): \(error.localizedDescription)")
+            } else {
+                self?.logger.info("Successfully committed \(percent)% SpO2 to Apple Health")
+            }
+        }
+    }
+
     private func saveActiveEnergyDelta(kcalDelta: Int) {
         guard isHealthKitAvailable else { return }
         guard let energyType = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned) else { return }
@@ -178,7 +267,66 @@ class HealthKitManager: ObservableObject {
             if let error = error {
                 self?.logger.warning("Could not write active kcal delta (\(kcalDelta)): \(error.localizedDescription)")
             } else {
-                self?.logger.info("Successfully committed +\(kcalDelta) kcal to Apple Health")
+                self?.logger.info("Successfully committed +\(kcalDelta) active kcal to Apple Health")
+            }
+        }
+    }
+
+    private func saveRestingEnergyDelta(kcalDelta: Int) {
+        guard isHealthKitAvailable else { return }
+        guard let energyType = HKQuantityType.quantityType(forIdentifier: .basalEnergyBurned) else { return }
+
+        let now = Date()
+        let start = now.addingTimeInterval(-60)
+        let quantity = HKQuantity(unit: .kilocalorie(), doubleValue: Double(kcalDelta))
+        let sample = HKQuantitySample(type: energyType, quantity: quantity, start: start, end: now)
+
+        healthStore.save(sample) { [weak self] success, error in
+            if let error = error {
+                self?.logger.warning("Could not write basal energy delta (\(kcalDelta)): \(error.localizedDescription)")
+            } else {
+                self?.logger.info("Successfully committed +\(kcalDelta) resting kcal to Apple Health")
+            }
+        }
+    }
+
+    private func saveSleepSession(durationMinutes: Int, status: String) {
+        guard isHealthKitAvailable else { return }
+        guard let sleepType = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis) else { return }
+
+        let now = Date()
+        let start = now.addingTimeInterval(-Double(durationMinutes * 60))
+
+        let categoryValue: Int
+        if #available(iOS 16.0, *) {
+            switch status.lowercased() {
+            case "deep":
+                categoryValue = HKCategoryValueSleepAnalysis.asleepDeep.rawValue
+            case "rem":
+                categoryValue = HKCategoryValueSleepAnalysis.asleepREM.rawValue
+            case "light":
+                categoryValue = HKCategoryValueSleepAnalysis.asleepCore.rawValue
+            case "awake":
+                categoryValue = HKCategoryValueSleepAnalysis.awake.rawValue
+            default:
+                categoryValue = HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue
+            }
+        } else {
+            categoryValue = HKCategoryValueSleepAnalysis.asleep.rawValue
+        }
+
+        let sample = HKCategorySample(
+            type: sleepType,
+            value: categoryValue,
+            start: start,
+            end: now
+        )
+
+        healthStore.save(sample) { [weak self] success, error in
+            if let error = error {
+                self?.logger.warning("Could not write sleep sample: \(error.localizedDescription)")
+            } else {
+                self?.logger.info("Successfully committed sleep session (\(durationMinutes) min, status=\(status)) to Apple Health")
             }
         }
     }

@@ -16,6 +16,13 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: MainViewModel by viewModels()
 
+    private val backgroundSensorPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { _ ->
+        viewModel.startService()
+        viewModel.onPermissionsGranted()
+    }
+
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
@@ -23,6 +30,7 @@ class MainActivity : ComponentActivity() {
         if (results.values.any { it }) {
             viewModel.onPermissionsGranted()
         }
+        checkBackgroundSensorPermissionElevation()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -63,8 +71,27 @@ class MainActivity : ComponentActivity() {
         if (needed.isEmpty()) {
             viewModel.startService()
             viewModel.onPermissionsGranted()
+            checkBackgroundSensorPermissionElevation()
         } else {
             permissionLauncher.launch(needed.toTypedArray())
+        }
+    }
+
+    private fun checkBackgroundSensorPermissionElevation() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val bodySensorsGranted = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BODY_SENSORS
+            ) == PackageManager.PERMISSION_GRANTED
+
+            val backgroundSensorsGranted = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BODY_SENSORS_BACKGROUND
+            ) == PackageManager.PERMISSION_GRANTED
+
+            if (bodySensorsGranted && !backgroundSensorsGranted) {
+                backgroundSensorPermissionLauncher.launch(Manifest.permission.BODY_SENSORS_BACKGROUND)
+            }
         }
     }
 }

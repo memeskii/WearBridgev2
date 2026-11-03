@@ -134,19 +134,14 @@ class DataSourceAssembler {
         // Parse attribute tuples
         while (state == State.READING_ATTRIBUTES && currentAttrIndex < expectedAttributes.size) {
             if (currentAttrId == -1) {
-                // Start reading a new attribute
-                if (offset >= bytes.size) break
-
-                currentAttrId = bytes[offset].toInt() and 0xFF
-                offset++
-
-                // Read 2-byte length
-                if (offset + 1 >= bytes.size) {
-                    // Need more data for length
+                // Start reading a new attribute - need 1 byte ID + 2 bytes length (3 bytes total)
+                if (offset + 3 > bytes.size) {
                     compactBuffer(bytes, offset)
                     return null
                 }
 
+                currentAttrId = bytes[offset].toInt() and 0xFF
+                offset++
                 currentAttrLength = readUInt16LE(bytes, offset)
                 offset += 2
                 currentAttrBytesRead = 0
