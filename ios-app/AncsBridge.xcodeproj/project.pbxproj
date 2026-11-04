@@ -41,6 +41,7 @@
 		C64BBEB053EDA70670D3A4F7 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE23C48EE7171805E83E7C74 /* SettingsView.swift */; };
 		E0FE400394C388A4F3E3D11E /* PeripheralManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CD7E830A5834A54112C3678 /* PeripheralManager.swift */; };
 		EE03FF684C5486654CB942D5 /* AncsBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DAFE504FCCF42292D6F4FE8 /* AncsBridgeTests.swift */; };
+		A1E300B14C6F4E8A9B2D7FB1 /* WatchOtaManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E300B04C6F4E8A9B2D7FB0 /* WatchOtaManager.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -91,6 +92,8 @@
 		E6C58B6974D26A3FA57422FB /* PairedDevice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairedDevice.swift; sourceTree = "<group>"; };
 		F7CC11B1B20F374C838167B5 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStore.swift; sourceTree = "<group>"; };
 		FC04AAF2152DC8E522F12619 /* AncsBridgeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AncsBridgeApp.swift; sourceTree = "<group>"; };
+		A1E300A84C6F4E8A9B2D7FA8 /* AppBrandRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppBrandRegistry.swift; sourceTree = "<group>"; };
+		A1E300B04C6F4E8A9B2D7FB0 /* WatchOtaManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchOtaManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -349,6 +352,8 @@
 			files = (
 				4181448E736418ED1E58AEFC /* AddWatchView.swift in Sources */,
 				9B3BB8D8B67A12F25A4D6F26 /* AncsBridgeApp.swift in Sources */,
+				A1E300A94C6F4E8A9B2D7FA9 /* AppBrandRegistry.swift in Sources */,
+				A1E300B14C6F4E8A9B2D7FB1 /* WatchOtaManager.swift in Sources */,
 				0D89D3ECFF7D0E5DF95C362D /* BLEConstants.swift in Sources */,
 				A1E300024C6F4E8A9B2D7F02 /* BLEServerManager.swift in Sources */,
 				A1E300114C6F4E8A9B2D7F11 /* BLEPacketMultiplexer.swift in Sources */,

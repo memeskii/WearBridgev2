@@ -14,6 +14,7 @@ public class HealthTelemetryManager: ObservableObject {
     private let userDefaultsKey = "wearbridge_latest_health_telemetry"
 
     @Published public var latestTelemetry: HealthTelemetryPayload? = nil
+    public var lastTelemetry: HealthTelemetryPayload? { latestTelemetry }
     @Published public var isPulling: Bool = false
     @Published public var lastSyncDate: Date? = nil
 

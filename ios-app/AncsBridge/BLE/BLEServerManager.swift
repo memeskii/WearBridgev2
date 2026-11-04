@@ -313,7 +313,7 @@ public class BLEServerManager: NSObject, ObservableObject {
 
         let mtu = currentWriteMtu()
         let chunks = multiplexer.createChunks(channel: .pingControl, payload: payload, maxChunkSize: mtu)
-        for (idx, chunk) in chunks.enumerated() {
+        for chunk in chunks {
             let flags = PacketFlags(rawValue: chunk[1])
             let seq = (UInt16(chunk[2]) << 8) | UInt16(chunk[3])
             multiplexer.logPacket(
@@ -694,7 +694,7 @@ public class BLEServerManager: NSObject, ObservableObject {
             HealthTelemetryManager.shared.handleIncomingTelemetry(data: jsonData)
         }
 
-        if let completion = activePullTelemetryCompletion {
+        if activePullTelemetryCompletion != nil {
             if let payload = try? JSONDecoder().decode(HealthTelemetryPayload.self, from: jsonData) {
                 DispatchQueue.main.async { [weak self] in
                     self?.activePullTelemetryCompletion?(.success(payload))

@@ -228,11 +228,20 @@ extension PeripheralManager: CBPeripheralDelegate {
 }
 
 // MARK: - DiscoveredWatch Model
-struct DiscoveredWatch: Identifiable {
-    let id: UUID
-    let name: String
-    let isConnected: Bool
-    let peripheral: CBPeripheral?
+public struct DiscoveredWatch: Identifiable {
+    public let id: UUID
+    public let name: String
+    public let isConnected: Bool
+    public let peripheral: CBPeripheral?
+    public var rssi: Int?
+
+    public init(id: UUID, name: String, isConnected: Bool, peripheral: CBPeripheral?, rssi: Int? = -65) {
+        self.id = id
+        self.name = name
+        self.isConnected = isConnected
+        self.peripheral = peripheral
+        self.rssi = rssi
+    }
 }
 
 // MARK: - Persisted Watch (for offline display)

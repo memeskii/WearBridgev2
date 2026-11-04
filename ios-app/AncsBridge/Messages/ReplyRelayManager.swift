@@ -12,6 +12,8 @@ public enum ReplyRelayMode: String, CaseIterable, Identifiable {
     case shortcuts = "shortcuts"
     case deeplink = "deeplink"
 
+    public static let deepLink = ReplyRelayMode.deeplink
+
     public var id: String { rawValue }
 
     public var displayName: String {
@@ -103,6 +105,8 @@ public struct SyntheticMessagePayload: Codable {
     }
 }
 
+public typealias RelayMode = ReplyRelayMode
+
 /**
  * Manages outbound message replies received from Wear OS over Channel 0x06.
  *
@@ -122,6 +126,7 @@ public class ReplyRelayManager: ObservableObject {
     private let keyShortcutName = "wearbridge_reply_shortcut_name"
 
     @Published public var relayMode: ReplyRelayMode = .webhook
+    @Published public var currentRelayMode: ReplyRelayMode = .webhook
     @Published public var webhookUrl: String = "http://localhost:8080/reply"
     @Published public var shortcutName: String = "WearBridgeReply"
     @Published public var lastRelayedReply: MessageReplyPayload? = nil
@@ -135,6 +140,7 @@ public class ReplyRelayManager: ObservableObject {
         if let modeStr = UserDefaults.standard.string(forKey: keyRelayMode),
            let mode = ReplyRelayMode(rawValue: modeStr) {
             self.relayMode = mode
+            self.currentRelayMode = mode
         }
         if let url = UserDefaults.standard.string(forKey: keyWebhookUrl), !url.isEmpty {
             self.webhookUrl = url
@@ -146,6 +152,7 @@ public class ReplyRelayManager: ObservableObject {
 
     public func updateRelayMode(_ mode: ReplyRelayMode) {
         self.relayMode = mode
+        self.currentRelayMode = mode
         UserDefaults.standard.set(mode.rawValue, forKey: keyRelayMode)
     }
 
@@ -197,8 +204,8 @@ public class ReplyRelayManager: ObservableObject {
             (status, detail) = await relayViaDeepLink(reply: reply)
         }
 
-        DispatchQueue.main.async {
-            self.lastRelayStatus = "\(status): \(detail)"
+        DispatchQueue.main.async { [weak self] in
+            self?.lastRelayStatus = "\(status): \(detail)"
         }
 
         // Send ACK back to watch over Channel 0x06

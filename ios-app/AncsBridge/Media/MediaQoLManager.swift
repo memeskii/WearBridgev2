@@ -45,6 +45,29 @@ public struct MediaFetchArtCommand: Codable {
     }
 }
 
+/// Model representing currently active now-playing track on the companion app.
+public struct ActiveMediaItem {
+    public var title: String
+    public var artist: String
+    public var album: String
+    public var audioRoute: String
+    public var artworkBase64: String?
+
+    public init(
+        title: String = "",
+        artist: String = "",
+        album: String = "",
+        audioRoute: String = "iPhone Speaker",
+        artworkBase64: String? = nil
+    ) {
+        self.title = title
+        self.artist = artist
+        self.album = album
+        self.audioRoute = audioRoute
+        self.artworkBase64 = artworkBase64
+    }
+}
+
 /**
  * Manages the Custom GATT Media QoL Bridge (Channel 0x05).
  *
@@ -65,6 +88,7 @@ public class MediaQoLManager: ObservableObject {
     @Published public var lastSentTrackKey: String? = nil
     @Published public var lastAudioRouteName: String = "iPhone"
     @Published public var isResolvingArt: Bool = false
+    @Published public var activeMediaItem: ActiveMediaItem? = nil
 
     private init() {
         setupNowPlayingObservers()
@@ -127,8 +151,8 @@ public class MediaQoLManager: ObservableObject {
             let artist = command.artist ?? ""
             let album = command.album
 
-            Task {
-                await self.resolveAndPushMediaQoL(title: title, artist: artist, album: album, duration: 0.0)
+            Task { [weak self] in
+                await self?.resolveAndPushMediaQoL(title: title, artist: artist, album: album, duration: 0.0)
             }
         } catch {
             logger.error("Failed to parse Channel 0x05 request JSON: \(error.localizedDescription)")
@@ -147,9 +171,9 @@ public class MediaQoLManager: ObservableObject {
         let trackKey = "\(artist)_\(title)"
         let routeName = getCurrentAudioRoute()
 
-        DispatchQueue.main.async {
-            self.isResolvingArt = true
-            self.lastAudioRouteName = routeName
+        DispatchQueue.main.async { [weak self] in
+            self?.isResolvingArt = true
+            self?.lastAudioRouteName = routeName
         }
 
         // 1. Resolve artwork
@@ -174,9 +198,16 @@ public class MediaQoLManager: ObservableObject {
             let encoder = JSONEncoder()
             let jsonData = try encoder.encode(payload)
 
-            DispatchQueue.main.async {
-                self.lastSentTrackKey = trackKey
-                self.isResolvingArt = false
+            DispatchQueue.main.async { [weak self] in
+                self?.lastSentTrackKey = trackKey
+                self?.isResolvingArt = false
+                self?.activeMediaItem = ActiveMediaItem(
+                    title: title,
+                    artist: artist,
+                    album: album ?? "",
+                    audioRoute: routeName,
+                    artworkBase64: base64Art.isEmpty ? nil : base64Art
+                )
             }
 
             BLEServerManager.shared.sendMediaQoLPayload(jsonData)

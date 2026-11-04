@@ -68,6 +68,7 @@ public class WeatherSyncService: NSObject, ObservableObject {
 
     @Published public var isFetching: Bool = false
     @Published public var latestWeather: CompactWeatherPayload? = nil
+    public var lastWeatherData: CompactWeatherPayload? { latestWeather }
     @Published public var lastSyncDate: Date? = nil
     @Published public var locationName: String = "Locating..."
 
