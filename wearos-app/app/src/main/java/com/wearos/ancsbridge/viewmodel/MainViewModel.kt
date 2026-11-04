@@ -39,6 +39,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val watchBatteryLevel: StateFlow<Int?> = AncsService.watchBatteryLevel
     val isWatchCharging: StateFlow<Boolean> = AncsService.isWatchCharging
 
+    // Observe synchronized weather from iPhone (Channel 0x03)
+    val weatherData: StateFlow<com.wearos.ancsbridge.weather.WeatherData?> =
+        com.wearos.ancsbridge.weather.WeatherRepository.getInstance(application).weatherState
+
     // In-App OTA Update Manager
     val otaManager = com.wearos.ancsbridge.ota.OtaUpdateManager(application)
     val otaState = otaManager.otaState
@@ -244,6 +248,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun onPermissionsGranted() {
         AncsService.instance?.recheckPermissionsAndRegisterSensors()
+    }
+
+    fun ringiPhone(): Boolean {
+        return AncsService.instance?.ringiPhone() ?: false
     }
 
     override fun onCleared() {

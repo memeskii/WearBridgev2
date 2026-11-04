@@ -94,7 +94,8 @@ class IncomingCallActivity : ComponentActivity() {
                 ACTION_CALLER_NAME_UPDATED -> {
                     val name = intent.getStringExtra(EXTRA_CALLER_NAME)
                     if (!name.isNullOrEmpty()) {
-                        callerNameState.value = name
+                        val res = com.wearos.ancsbridge.contacts.ContactRepository.getInstance(context).resolveContactName(name)
+                        callerNameState.value = res ?: name
                     }
                 }
             }
@@ -115,7 +116,9 @@ class IncomingCallActivity : ComponentActivity() {
         // Keep screen on while call screen is showing
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        callerNameState.value = intent.getStringExtra(EXTRA_CALLER_NAME) ?: "Unknown Caller"
+        val rawName = intent.getStringExtra(EXTRA_CALLER_NAME) ?: "Unknown Caller"
+        val resolved = com.wearos.ancsbridge.contacts.ContactRepository.getInstance(this).resolveContactName(rawName)
+        callerNameState.value = resolved ?: rawName
         val appName = intent.getStringExtra(EXTRA_APP_NAME) ?: "Phone"
         notificationUid = intent.getLongExtra(EXTRA_NOTIFICATION_UID, -1)
 

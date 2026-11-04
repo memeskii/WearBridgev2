@@ -66,6 +66,7 @@ public class BLEServerManager: NSObject, ObservableObject {
     private var activeFileTransferTotalBytes: Int = 0
 
     private var activeLoopbackCompletion: ((Result<String, Error>) -> Void)?
+    private var activePullTelemetryCompletion: ((Result<HealthTelemetryPayload, Error>) -> Void)?
 
     // MARK: - Published Properties
     @Published public var incomingReplies: [WatchReply] = []
@@ -156,6 +157,10 @@ public class BLEServerManager: NSObject, ObservableObject {
     // MARK: - Outbound Multiplexer Queue & Chunking
     @discardableResult
     private func enqueueOutboundChunk(_ chunk: Data) -> Bool {
+        guard !subscribedCentrals.isEmpty else {
+            logger.debug("No subscribed centrals. Dropping outbound chunk.")
+            return false
+        }
         outboundQueue.append(chunk)
         flushOutboundQueue()
         return true
@@ -164,6 +169,10 @@ public class BLEServerManager: NSObject, ObservableObject {
     private func flushOutboundQueue() {
         guard !isFlushingQueue else { return }
         guard let char = quickReplyCharacteristic else { return }
+        guard !subscribedCentrals.isEmpty else {
+            outboundQueue.removeAll()
+            return
+        }
 
         isFlushingQueue = true
 
@@ -199,18 +208,22 @@ public class BLEServerManager: NSObject, ObservableObject {
             }
 
         case .messageReply:
-            if let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
-               let type = json["type"] as? String {
-                if type == "loopback_echo", let echoMsg = json["message"] as? String {
-                    logger.info("Confirmed loopback echo: \(echoMsg)")
-                    DispatchQueue.main.async { [weak self] in
-                        self?.activeLoopbackCompletion?(.success(echoMsg))
-                        self?.activeLoopbackCompletion = nil
-                    }
-                } else if type == "reply", let uid = json["uid"] as? Int, let msg = json["message"] as? String {
-                    let reply = WatchReply(notificationUid: uid, message: msg, timestamp: Date())
-                    DispatchQueue.main.async { [weak self] in
-                        self?.incomingReplies.insert(reply, at: 0)
+            if let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] {
+                if json["replyId"] != nil {
+                    // Phase 5 MessageReplyPayload from Watch
+                    ReplyRelayManager.shared.handleIncomingReplyPacket(data: payload)
+                } else if let type = json["type"] as? String {
+                    if type == "loopback_echo", let echoMsg = json["message"] as? String {
+                        logger.info("Confirmed loopback echo: \(echoMsg)")
+                        DispatchQueue.main.async { [weak self] in
+                            self?.activeLoopbackCompletion?(.success(echoMsg))
+                            self?.activeLoopbackCompletion = nil
+                        }
+                    } else if type == "reply", let uid = json["uid"] as? Int, let msg = json["message"] as? String {
+                        let reply = WatchReply(notificationUid: uid, message: msg, timestamp: Date())
+                        DispatchQueue.main.async { [weak self] in
+                            self?.incomingReplies.insert(reply, at: 0)
+                        }
                     }
                 }
             } else if let replyString = String(data: payload, encoding: .utf8) {
@@ -225,17 +238,24 @@ public class BLEServerManager: NSObject, ObservableObject {
             }
 
         case .binaryFile:
-            // Peer completed sending a file — acknowledge receipt
-            let computedCrc = CRC32.checksum(data: payload)
-            var ackData = Data()
-            ackData.append(UInt8((computedCrc >> 24) & 0xFF))
-            ackData.append(UInt8((computedCrc >> 16) & 0xFF))
-            ackData.append(UInt8((computedCrc >> 8) & 0xFF))
-            ackData.append(UInt8(computedCrc & 0xFF))
-            multiplexer.sendAck(channel: .binaryFile, sequenceNumber: 0, payload: ackData)
+            if let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any], json["cmd"] != nil {
+                FileTransferManager.shared.handleIncomingControlPacket(payload)
+            } else {
+                // Peer completed sending a file — acknowledge receipt
+                let computedCrc = CRC32.checksum(data: payload)
+                var ackData = Data()
+                ackData.append(UInt8((computedCrc >> 24) & 0xFF))
+                ackData.append(UInt8((computedCrc >> 16) & 0xFF))
+                ackData.append(UInt8((computedCrc >> 8) & 0xFF))
+                ackData.append(UInt8(computedCrc & 0xFF))
+                multiplexer.sendAck(channel: .binaryFile, sequenceNumber: 0, payload: ackData)
+            }
 
         case .healthTelemetryJson:
             processHealthJson(payload)
+
+        case .mediaQoL:
+            MediaQoLManager.shared.handleIncomingRequest(data: payload)
 
         default:
             logger.info("Payload received on channel \(channel.name)")
@@ -493,6 +513,140 @@ public class BLEServerManager: NSObject, ObservableObject {
         }
     }
 
+    // MARK: - Contacts and Weather Sync Dispatch
+    /// Sends a serialized contacts array over BLE Channel 0x02
+    public func sendContactsPayload(_ payload: Data) {
+        let mtu = currentWriteMtu()
+        let chunks = multiplexer.createChunks(channel: .contactsJson, payload: payload, maxChunkSize: mtu)
+        logger.info("Transmitting contacts payload (\(payload.count) bytes) in \(chunks.count) chunks over Channel 0x02")
+        for chunk in chunks {
+            let flags = PacketFlags(rawValue: chunk[1])
+            let seq = (UInt16(chunk[2]) << 8) | UInt16(chunk[3])
+            multiplexer.logPacket(
+                direction: .tx,
+                channel: .contactsJson,
+                flags: flags,
+                sequenceNumber: seq,
+                payloadSize: chunk.count - BLEPacketMultiplexer.headerSize,
+                summary: "Contacts Sync (\(payload.count) B)"
+            )
+            enqueueOutboundChunk(chunk)
+        }
+    }
+
+    /// Sends a compact weather forecast over BLE Channel 0x03
+    public func sendWeatherPayload(_ payload: Data) {
+        let mtu = currentWriteMtu()
+        let chunks = multiplexer.createChunks(channel: .weatherJson, payload: payload, maxChunkSize: mtu)
+        logger.info("Transmitting weather payload (\(payload.count) bytes) in \(chunks.count) chunks over Channel 0x03")
+        for chunk in chunks {
+            let flags = PacketFlags(rawValue: chunk[1])
+            let seq = (UInt16(chunk[2]) << 8) | UInt16(chunk[3])
+            multiplexer.logPacket(
+                direction: .tx,
+                channel: .weatherJson,
+                flags: flags,
+                sequenceNumber: seq,
+                payloadSize: chunk.count - BLEPacketMultiplexer.headerSize,
+                summary: "Weather Sync (\(payload.count) B)"
+            )
+            enqueueOutboundChunk(chunk)
+        }
+    }
+
+    /// Sends a "PULL_TELEMETRY" request over BLE Channel 0x04 and awaits watch telemetry response.
+    public func sendPullTelemetryCommand(completion: @escaping (Result<HealthTelemetryPayload, Error>) -> Void) {
+        activePullTelemetryCompletion = completion
+
+        let commandData = "PULL_TELEMETRY".data(using: .utf8)!
+        let mtu = currentWriteMtu()
+        let chunks = multiplexer.createChunks(channel: .healthTelemetryJson, payload: commandData, maxChunkSize: mtu)
+        logger.info("Transmitting PULL_TELEMETRY command over Channel 0x04")
+
+        for chunk in chunks {
+            let flags = PacketFlags(rawValue: chunk[1])
+            let seq = (UInt16(chunk[2]) << 8) | UInt16(chunk[3])
+            multiplexer.logPacket(
+                direction: .tx,
+                channel: .healthTelemetryJson,
+                flags: flags,
+                sequenceNumber: seq,
+                payloadSize: chunk.count - BLEPacketMultiplexer.headerSize,
+                summary: "Pull Telemetry Command"
+            )
+            enqueueOutboundChunk(chunk)
+        }
+
+        // 10s timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) { [weak self] in
+            if self?.activePullTelemetryCompletion != nil {
+                self?.activePullTelemetryCompletion?(.failure(NSError(domain: "WearBridge", code: -6, userInfo: [NSLocalizedDescriptionKey: "Pull telemetry timed out after 10s"])))
+                self?.activePullTelemetryCompletion = nil
+            }
+        }
+    }
+
+    /// Sends Media QoL payload (artwork, audio route, duration) over BLE Channel 0x05
+    public func sendMediaQoLPayload(_ payload: Data) {
+        let mtu = currentWriteMtu()
+        let chunks = multiplexer.createChunks(channel: .mediaQoL, payload: payload, maxChunkSize: mtu)
+        logger.info("Transmitting Media QoL payload (\(payload.count) bytes) in \(chunks.count) chunks over Channel 0x05")
+
+        for chunk in chunks {
+            let flags = PacketFlags(rawValue: chunk[1])
+            let seq = (UInt16(chunk[2]) << 8) | UInt16(chunk[3])
+            multiplexer.logPacket(
+                direction: .tx,
+                channel: .mediaQoL,
+                flags: flags,
+                sequenceNumber: seq,
+                payloadSize: chunk.count - BLEPacketMultiplexer.headerSize,
+                summary: "Media QoL Sync (\(payload.count) B)"
+            )
+            enqueueOutboundChunk(chunk)
+        }
+    }
+
+    /// Sends a message payload (ACK or synthetic message injection) over BLE Channel 0x06
+    public func sendMessageReplyData(_ payload: Data) {
+        let mtu = currentWriteMtu()
+        let chunks = multiplexer.createChunks(channel: .messageReply, payload: payload, maxChunkSize: mtu)
+        logger.info("Transmitting Message Reply payload (\(payload.count) bytes) in \(chunks.count) chunks over Channel 0x06")
+
+        for chunk in chunks {
+            let flags = PacketFlags(rawValue: chunk[1])
+            let seq = (UInt16(chunk[2]) << 8) | UInt16(chunk[3])
+            multiplexer.logPacket(
+                direction: .tx,
+                channel: .messageReply,
+                flags: flags,
+                sequenceNumber: seq,
+                payloadSize: chunk.count - BLEPacketMultiplexer.headerSize,
+                summary: "Message Reply Sync (\(payload.count) B)"
+            )
+            enqueueOutboundChunk(chunk)
+        }
+    }
+
+    /// Sends a file transfer payload (control packet or binary window) on Channel 0x07
+    public func sendFileTransferPayload(_ payload: Data) {
+        let mtu = currentWriteMtu()
+        let chunks = multiplexer.createChunks(channel: .binaryFile, payload: payload, maxChunkSize: mtu)
+        for chunk in chunks {
+            let flags = PacketFlags(rawValue: chunk[1])
+            let seq = (UInt16(chunk[2]) << 8) | UInt16(chunk[3])
+            multiplexer.logPacket(
+                direction: .tx,
+                channel: .binaryFile,
+                flags: flags,
+                sequenceNumber: seq,
+                payloadSize: chunk.count - BLEPacketMultiplexer.headerSize,
+                summary: "File Transfer Payload (\(payload.count) B)"
+            )
+            enqueueOutboundChunk(chunk)
+        }
+    }
+
     public func currentWriteMtu() -> Int {
         if let central = subscribedCentrals.first {
             return max(20, central.maximumUpdateValueLength)
@@ -535,6 +689,20 @@ public class BLEServerManager: NSObject, ObservableObject {
 
     // MARK: - Health JSON Processor
     private func processHealthJson(_ jsonData: Data) {
+        // Forward to Phase 3 HealthTelemetryManager for SwiftData persistence & cache on @MainActor
+        Task { @MainActor in
+            HealthTelemetryManager.shared.handleIncomingTelemetry(data: jsonData)
+        }
+
+        if let completion = activePullTelemetryCompletion {
+            if let payload = try? JSONDecoder().decode(HealthTelemetryPayload.self, from: jsonData) {
+                DispatchQueue.main.async { [weak self] in
+                    self?.activePullTelemetryCompletion?(.success(payload))
+                    self?.activePullTelemetryCompletion = nil
+                }
+            }
+        }
+
         guard let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
               let metrics = json["metrics"] as? [String: Any] else {
             return
@@ -626,11 +794,28 @@ extension BLEServerManager: CBPeripheralManagerDelegate {
         let centralMtu = central.maximumUpdateValueLength
         negotiatedMTU = centralMtu
         logger.info("Central subscribed to \(characteristic.uuid). Central MTU: \(centralMtu)")
+
+        if characteristic.uuid == Self.quickReplyCharacteristicUUID || characteristic.uuid == Self.connectionStatusUUID {
+            // Clear any stale outbound queue from previous disconnected session
+            outboundQueue.removeAll()
+            isFlushingQueue = false
+
+            // Trigger auto-sync for contacts (delta hash check) and weather on watch connection
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                ContactsSyncManager.shared.syncContacts(force: false)
+                WeatherSyncService.shared.syncWeather(force: false)
+            }
+        }
     }
 
     public func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didUnsubscribeFrom characteristic: CBCharacteristic) {
         subscribedCentrals.remove(central)
         logger.info("Central unsubscribed from \(characteristic.uuid)")
+        if subscribedCentrals.isEmpty {
+            outboundQueue.removeAll()
+            isFlushingQueue = false
+            FileTransferManager.shared.cancelTransfer()
+        }
     }
 
     public func peripheralManagerIsReady(toUpdateSubscribers peripheral: CBPeripheralManager) {

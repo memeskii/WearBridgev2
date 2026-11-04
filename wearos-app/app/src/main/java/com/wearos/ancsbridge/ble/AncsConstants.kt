@@ -98,4 +98,51 @@ object AncsConstants {
     const val ERROR_INVALID_COMMAND = 0xA1
     const val ERROR_INVALID_PARAMETER = 0xA2
     const val ERROR_ACTION_FAILED = 0xA3
+
+    // MARK: - Apple Media Service (AMS) Protocol Constants
+    val AMS_SERVICE_UUID: UUID = UUID.fromString("89D3502B-0F36-433A-8EF4-C502AD55F8DC")
+    val AMS_REMOTE_COMMAND_UUID: UUID = UUID.fromString("9B3C81D8-57B1-4A8A-B8DF-0E56F7CA51C2")
+    val AMS_ENTITY_UPDATE_UUID: UUID = UUID.fromString("2F7CABCE-808D-411F-9A0C-BB92BA96C102")
+    val AMS_ENTITY_ATTRIBUTE_UUID: UUID = UUID.fromString("C6B2F38C-23AB-46D8-A6AB-A3A870B5D770")
+
+    // AMS Entity IDs
+    const val AMS_ENTITY_ID_PLAYER: Byte = 0x00
+    const val AMS_ENTITY_ID_QUEUE: Byte = 0x01
+    const val AMS_ENTITY_ID_TRACK: Byte = 0x02
+
+    // AMS Player Attribute IDs
+    const val AMS_PLAYER_ATTR_NAME: Byte = 0x00
+    const val AMS_PLAYER_ATTR_PLAYBACK_INFO: Byte = 0x01
+    const val AMS_PLAYER_ATTR_VOLUME: Byte = 0x02
+
+    // AMS Queue Attribute IDs
+    const val AMS_QUEUE_ATTR_INDEX: Byte = 0x00
+    const val AMS_QUEUE_ATTR_COUNT: Byte = 0x01
+    const val AMS_QUEUE_ATTR_SHUFFLE_MODE: Byte = 0x02
+    const val AMS_QUEUE_ATTR_REPEAT_MODE: Byte = 0x03
+
+    // AMS Track Attribute IDs
+    const val AMS_TRACK_ATTR_ARTIST: Byte = 0x00
+    const val AMS_TRACK_ATTR_ALBUM: Byte = 0x01
+    const val AMS_TRACK_ATTR_TITLE: Byte = 0x02
+    const val AMS_TRACK_ATTR_DURATION: Byte = 0x03
+
+    // AMS Flags
+    const val AMS_ENTITY_UPDATE_FLAG_TRUNCATED: Byte = 0x01
+
+    // AMS Remote Commands
+    const val AMS_REMOTE_CMD_PLAY: Byte = 0x00
+    const val AMS_REMOTE_CMD_PAUSE: Byte = 0x01
+    const val AMS_REMOTE_CMD_TOGGLE_PLAY_PAUSE: Byte = 0x02
+    const val AMS_REMOTE_CMD_NEXT_TRACK: Byte = 0x03
+    const val AMS_REMOTE_CMD_PREVIOUS_TRACK: Byte = 0x04
+    const val AMS_REMOTE_CMD_VOLUME_UP: Byte = 0x05
+    const val AMS_REMOTE_CMD_VOLUME_DOWN: Byte = 0x06
+    const val AMS_REMOTE_CMD_ADVANCE_REPEAT_MODE: Byte = 0x07
+    const val AMS_REMOTE_CMD_ADVANCE_SHUFFLE_MODE: Byte = 0x08
+    const val AMS_REMOTE_CMD_SKIP_FORWARD: Byte = 0x09
+    const val AMS_REMOTE_CMD_SKIP_BACKWARD: Byte = 0x0A
+    const val AMS_REMOTE_CMD_LIKE_TRACK: Byte = 0x0B
+    const val AMS_REMOTE_CMD_DISLIKE_TRACK: Byte = 0x0C
+    const val AMS_REMOTE_CMD_BOOKMARK_TRACK: Byte = 0x0D
 }

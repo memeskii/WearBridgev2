@@ -1,485 +1,83 @@
 package com.wearos.ancsbridge.ui
 
 import android.annotation.SuppressLint
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
-import androidx.wear.compose.material3.Button
-import androidx.wear.compose.material3.ButtonDefaults
-import androidx.wear.compose.material3.CircularProgressIndicator
-import androidx.wear.compose.material3.ListHeader
-import androidx.wear.compose.material3.Text
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.PhoneIphone
-import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.BatteryStd
-import androidx.compose.material.icons.rounded.BatteryChargingFull
-import androidx.wear.compose.material3.Icon
-import com.wearos.ancsbridge.model.ConnectionState
+import androidx.wear.compose.material3.AppScaffold
+import androidx.wear.compose.material3.ScreenScaffold
+import androidx.wear.compose.material3.TimeText
+import com.wearos.ancsbridge.ui.screens.HealthFilesScreen
+import com.wearos.ancsbridge.ui.screens.MediaPlayerScreen
+import com.wearos.ancsbridge.ui.screens.MessageInboxScreen
+import com.wearos.ancsbridge.ui.screens.StatusWeatherScreen
 import com.wearos.ancsbridge.viewmodel.MainViewModel
 
+/**
+ * Main Wear OS Hub Launcher combining 4 primary screens in a smooth Horizontal Pager:
+ * Screen 1: Status & Synced Weather
+ * Screen 2: Native AMS + Channel 0x05 Media Player
+ * Screen 3: Persistent Messages Inbox & Outbound Replies (0x06)
+ * Screen 4: Health Telemetry (0x04) & Transferred Watch Faces / APK Installer (0x07)
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @SuppressLint("MissingPermission")
 @Composable
 fun MainScreen(viewModel: MainViewModel) {
-    var showPairScreen by remember { mutableStateOf(false) }
-    var showNotificationsScreen by remember { mutableStateOf(false) }
+    val pagerState = rememberPagerState(initialPage = 0, pageCount = { 4 })
 
-    if (showPairScreen) {
-        PairNewDeviceScreen(
-            viewModel = viewModel,
-            onDismiss = { showPairScreen = false }
-        )
-    } else if (showNotificationsScreen) {
-        val activeNotifs by viewModel.activeNotifications.collectAsState()
-        NotificationScreen(
-            notifications = activeNotifs,
-            onSendReply = { uid, reply -> viewModel.sendQuickReply(uid.toLong(), reply) },
-            onDismiss = { uid -> viewModel.dismissNotification(uid) },
-            onBack = { showNotificationsScreen = false }
-        )
-    } else {
-        HomeScreen(
-            viewModel = viewModel,
-            onPairNewDevice = { showPairScreen = true },
-            onViewNotifications = { showNotificationsScreen = true }
-        )
-    }
-}
-
-@SuppressLint("MissingPermission")
-@Composable
-fun HomeScreen(
-    viewModel: MainViewModel,
-    onPairNewDevice: () -> Unit,
-    onViewNotifications: () -> Unit = {}
-) {
-    val connectionState by viewModel.connectionState.collectAsState()
-    val activeNotifs by viewModel.activeNotifications.collectAsState()
-    val watchBattery by viewModel.watchBatteryLevel.collectAsState()
-    val isCharging by viewModel.isWatchCharging.collectAsState()
-    val otaState by viewModel.otaState.collectAsState()
-
-    ScalingLazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        item {
-            ListHeader {
-                Text("WearBridge")
-            }
-        }
-
-        when (connectionState) {
-            is ConnectionState.Connected -> {
-                val deviceName = (connectionState as ConnectionState.Connected).deviceName ?: "iPhone"
-
-                // Status
-                item {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
-                    ) {
-                        Icon(
-                            Icons.Rounded.CheckCircle,
-                            contentDescription = null,
-                            tint = Color(0xFF34D399),
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column {
-                            Text("Connected", fontSize = 14.sp)
-                            Text(
-                                "Notifications active",
-                                fontSize = 11.sp,
-                                color = Color(0xFF34D399)
-                            )
-                        }
+    AppScaffold {
+        ScreenScaffold(
+            timeText = { TimeText() }
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black)
+            ) {
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier.fillMaxSize()
+                ) { page ->
+                    when (page) {
+                        0 -> StatusWeatherScreen(viewModel = viewModel)
+                        1 -> MediaPlayerScreen()
+                        2 -> MessageInboxScreen()
+                        3 -> HealthFilesScreen()
                     }
                 }
 
-                // iPhone info
-                item {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth(0.9f)
-                            .padding(vertical = 4.dp)
-                    ) {
-                        Icon(
-                            Icons.Rounded.PhoneIphone,
-                            contentDescription = null,
-                            tint = Color(0xFF60A5FA),
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column {
-                            Text(deviceName, fontSize = 14.sp)
-                            Text(
-                                "via ANCS over BLE",
-                                fontSize = 11.sp,
-                                color = Color(0xFF9CA3AF)
-                            )
-                        }
-                    }
-                }
-
-                item { Spacer(modifier = Modifier.height(4.dp)) }
-
-                // Watch Battery Telemetry Status
-                if (watchBattery != null) {
-                    item {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center,
+                // Page Indicator Dots
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    repeat(4) { index ->
+                        val isSelected = pagerState.currentPage == index
+                        Box(
                             modifier = Modifier
-                                .fillMaxWidth(0.9f)
-                                .background(Color(0xFF1E293B), CircleShape)
-                                .padding(horizontal = 10.dp, vertical = 4.dp)
-                        ) {
-                            Icon(
-                                if (isCharging) Icons.Rounded.BatteryChargingFull else Icons.Rounded.BatteryStd,
-                                contentDescription = null,
-                                tint = if (isCharging) Color(0xFF34D399) else Color(0xFF60A5FA),
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Battery: ${watchBattery}%${if (isCharging) " ⚡" else ""}",
-                                fontSize = 11.sp,
-                                color = Color(0xFFE2E8F0)
-                            )
-                        }
-                    }
-                }
-
-                item { Spacer(modifier = Modifier.height(8.dp)) }
-
-                // Live Notifications Button
-                item {
-                    Button(
-                        onClick = onViewNotifications,
-                        modifier = Modifier.fillMaxWidth(0.9f),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (activeNotifs.isNotEmpty()) Color(0xFF2563EB) else Color(0xFF2E3440)
-                        )
-                    ) {
-                        Text(
-                            text = if (activeNotifs.isNotEmpty()) "Notifications (${activeNotifs.size})" else "Notifications (0)",
-                            fontSize = 12.sp,
-                            color = Color.White
-                        )
-                    }
-                }
-
-                item { Spacer(modifier = Modifier.height(4.dp)) }
-
-                // Clear notifications
-                item {
-                    Button(
-                        onClick = { viewModel.clearAllNotifications() },
-                        modifier = Modifier.fillMaxWidth(0.9f)
-                    ) {
-                        Text("Clear Notifications", fontSize = 12.sp)
-                    }
-                }
-
-                item { Spacer(modifier = Modifier.height(4.dp)) }
-
-                // Disconnect
-                item {
-                    Button(
-                        onClick = { viewModel.disconnect() },
-                        modifier = Modifier.fillMaxWidth(0.9f),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFFEF4444)
-                        )
-                    ) {
-                        Text("Disconnect", fontSize = 12.sp, color = Color.White)
-                    }
-                }
-            }
-
-            is ConnectionState.Connecting, is ConnectionState.Bonding -> {
-                item {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(16.dp)
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            when (connectionState) {
-                                is ConnectionState.Connecting ->
-                                    "Connecting to ${(connectionState as ConnectionState.Connecting).deviceName ?: "iPhone"}…"
-                                is ConnectionState.Bonding ->
-                                    "Pairing with ${(connectionState as ConnectionState.Bonding).deviceName ?: "iPhone"}…"
-                                else -> "Connecting…"
-                            },
-                            textAlign = TextAlign.Center,
-                            fontSize = 13.sp
-                        )
-                    }
-                }
-            }
-
-            else -> {
-                // Idle / Disconnected / Error — show reconnect or pair
-
-                if (viewModel.hasBondedIPhone()) {
-                    // Has a bonded device — show reconnecting state
-                    item {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier.padding(16.dp)
-                        ) {
-                            Icon(
-                                Icons.Rounded.PhoneIphone,
-                                contentDescription = null,
-                                tint = Color(0xFF9CA3AF),
-                                modifier = Modifier.size(28.dp)
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                if (connectionState is ConnectionState.Error)
-                                    (connectionState as ConnectionState.Error).message
-                                else "iPhone not in range",
-                                textAlign = TextAlign.Center,
-                                fontSize = 13.sp,
-                                color = Color(0xFF9CA3AF)
-                            )
-                        }
-                    }
-
-                    item {
-                        Button(
-                            onClick = { viewModel.startService() },
-                            modifier = Modifier.fillMaxWidth(0.9f)
-                        ) {
-                            Text("Reconnect", fontSize = 12.sp)
-                        }
-                    }
-
-                    item { Spacer(modifier = Modifier.height(4.dp)) }
-                } else {
-                    // No bonded device — prompt to pair
-                    item {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier.padding(16.dp)
-                        ) {
-                            Icon(
-                                Icons.Rounded.PhoneIphone,
-                                contentDescription = null,
-                                tint = Color(0xFF9CA3AF),
-                                modifier = Modifier.size(32.dp)
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                "No iPhone paired",
-                                fontSize = 14.sp,
-                                textAlign = TextAlign.Center
-                            )
-                            Text(
-                                "Pair your iPhone to start receiving notifications",
-                                fontSize = 11.sp,
-                                color = Color(0xFF9CA3AF),
-                                textAlign = TextAlign.Center
-                            )
-                        }
-                    }
-                }
-
-                // Always show Pair New Device button
-                item {
-                    Button(
-                        onClick = onPairNewDevice,
-                        modifier = Modifier.fillMaxWidth(0.9f),
-                        colors = if (viewModel.hasBondedIPhone())
-                            ButtonDefaults.buttonColors(containerColor = Color(0xFF374151))
-                        else ButtonDefaults.buttonColors()
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Rounded.Add,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Pair New Device", fontSize = 12.sp)
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@SuppressLint("MissingPermission")
-@Composable
-fun PairNewDeviceScreen(viewModel: MainViewModel, onDismiss: () -> Unit) {
-    val connectionState by viewModel.connectionState.collectAsState()
-    val isScanning by viewModel.isScanning.collectAsState()
-    val scanStatus by viewModel.scanStatus.collectAsState()
-
-    // Auto-dismiss when connected
-    if (connectionState is ConnectionState.Connected) {
-        onDismiss()
-        return
-    }
-
-    ScalingLazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        item {
-            ListHeader {
-                Text("Pair New Device")
-            }
-        }
-
-        // Instructions
-        item {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-            ) {
-                Text(
-                    "Make sure the WearBridge companion app is open on your iPhone",
-                    textAlign = TextAlign.Center,
-                    fontSize = 12.sp,
-                    color = Color(0xFF9CA3AF)
-                )
-            }
-        }
-
-        // Scanning state
-        when (connectionState) {
-            is ConnectionState.Connecting -> {
-                item {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(16.dp)
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            "Connecting to ${(connectionState as ConnectionState.Connecting).deviceName ?: "iPhone"}…",
-                            textAlign = TextAlign.Center,
-                            fontSize = 13.sp
-                        )
-                    }
-                }
-            }
-
-            is ConnectionState.Bonding -> {
-                item {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(16.dp)
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            "Accept the pairing dialog on your iPhone",
-                            textAlign = TextAlign.Center,
-                            fontSize = 13.sp
-                        )
-                    }
-                }
-            }
-
-            else -> {
-                // Scan button
-                item {
-                    Button(
-                        onClick = {
-                            if (isScanning) viewModel.stopScan()
-                            else viewModel.scanAndConnect()
-                        },
-                        modifier = Modifier.fillMaxWidth(0.9f)
-                    ) {
-                        Text(
-                            if (isScanning) "Stop Scanning" else "Start Scanning",
-                            fontSize = 12.sp
-                        )
-                    }
-                }
-
-                // Scan status
-                if (isScanning || scanStatus.isNotEmpty()) {
-                    item {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier.padding(8.dp)
-                        ) {
-                            if (isScanning) {
-                                CircularProgressIndicator(modifier = Modifier.size(20.dp))
-                                Spacer(modifier = Modifier.height(4.dp))
-                            }
-                            if (scanStatus.isNotEmpty()) {
-                                Text(
-                                    scanStatus,
-                                    textAlign = TextAlign.Center,
-                                    fontSize = 11.sp,
-                                    color = Color(0xFF9CA3AF)
+                                .size(if (isSelected) 6.dp else 4.dp)
+                                .background(
+                                    color = if (isSelected) Color.White else Color(0xFF616161),
+                                    shape = CircleShape
                                 )
-                            }
-                        }
+                        )
                     }
-                }
-            }
-        }
-
-        item { Spacer(modifier = Modifier.height(8.dp)) }
-
-        // Back button
-        item {
-            Button(
-                onClick = {
-                    viewModel.stopScan()
-                    onDismiss()
-                },
-                modifier = Modifier.fillMaxWidth(0.9f),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF374151)
-                )
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Rounded.Close,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Back", fontSize = 12.sp)
                 }
             }
         }

@@ -17,6 +17,8 @@ targets:
         LSRequiresIPhoneOS: true
         NSBluetoothAlwaysUsageDescription: "WearBridge needs Bluetooth to connect to your Pixel Watch and forward notifications."
         NSBluetoothPeripheralUsageDescription: "WearBridge needs Bluetooth to be discoverable by your Pixel Watch."
+        NSContactsUsageDescription: "WearBridge syncs your contacts to your Wear OS watch to identify callers and senders."
+        NSLocationWhenInUseUsageDescription: "WearBridge uses your location to fetch local weather forecasts for your watch."
         UIBackgroundModes:
           - bluetooth-peripheral
         UILaunchScreen: {}
@@ -25,8 +27,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.wearos.ancsbridge.companion
-        MARKETING_VERSION: "1.2"
-        CURRENT_PROJECT_VERSION: "3"
+        MARKETING_VERSION: "2.0.0"
+        CURRENT_PROJECT_VERSION: "200"
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_ENTITLEMENTS: AncsBridge/AncsBridge.entitlements

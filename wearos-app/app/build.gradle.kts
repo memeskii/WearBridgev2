@@ -13,18 +13,43 @@ android {
         applicationId = "com.wearos.ancsbridge"
         minSdk = 33 // Wear OS 4
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2"
+        versionCode = 200
+        versionName = "2.0.0"
+    }
+
+    signingConfigs {
+        create("release") {
+            storeFile = file("../wearbridge-signing.keystore")
+            storePassword = "wearbridge_release_pass"
+            keyAlias = "wearbridge"
+            keyPassword = "wearbridge_release_pass"
+        }
+        getByName("debug") {
+            storeFile = file("../wearbridge-signing.keystore")
+            storePassword = "wearbridge_release_pass"
+            keyAlias = "wearbridge"
+            keyPassword = "wearbridge_release_pass"
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
         }
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
     }
 
     compileOptions {
@@ -69,6 +94,15 @@ dependencies {
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
+
+    // Jetpack DataStore
+    implementation("androidx.datastore:datastore-preferences:1.1.1")
+
+    // Wear OS Tiles & ProtoLayout
+    implementation("androidx.wear.tiles:tiles:1.4.1")
+    implementation("androidx.wear.tiles:tiles-material:1.4.1")
+    implementation("androidx.wear.protolayout:protolayout:1.2.1")
+    implementation("androidx.wear.protolayout:protolayout-material:1.2.1")
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")

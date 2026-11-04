@@ -236,6 +236,7 @@ class AncsService : Service() {
                 val uid = intent.getIntExtra(EXTRA_NOTIFICATION_UID, -1)
                 if (uid != -1) {
                     Log.i(TAG, "Sending quick reply for UID #$uid: $replyText")
+                    com.wearos.ancsbridge.messages.MessageReplyManager.getInstance(this).sendQuickReplyForUid(uid.toLong(), replyText)
                     connectionManager.sendQuickReply(uid, replyText)
                 } else {
                     val callerName = intent.getStringExtra("caller_name") ?: "Unknown"
@@ -279,6 +280,7 @@ class AncsService : Service() {
         _activeNotifications.value = emptyList()
         healthDataManager?.stop()
         healthDataManager = null
+        com.wearos.ancsbridge.health.HealthTelemetryManager.getInstance(this).stopPeriodicSync()
         batteryGattServer?.stop()
         batteryGattServer = null
         try {
@@ -498,6 +500,9 @@ class AncsService : Service() {
         val appName = resolveAppName(notification.appIdentifier)
         val updatedNotification = notification.copy(appDisplayName = appName)
 
+        // Intercept messaging app notifications for Room Message Inbox
+        com.wearos.ancsbridge.messages.MessageSyncManager.getInstance(this).handleIncomingAncsNotification(updatedNotification)
+
         // Publish to active reactive state flow for Wear OS UI cards
         _activeNotifications.update { current ->
             (listOf(updatedNotification) + current.filter { it.uid != updatedNotification.uid })
@@ -548,11 +553,11 @@ class AncsService : Service() {
         } else {
             AncsApplication.channelForCategory(notification.categoryId)
         }
-        val brandInfo = AppIconResolver.resolve(notification.appIdentifier)
+        val brandMeta = AppBrandRegistry.resolve(notification.appIdentifier)
         val largeIconBitmap = AppIconRenderer.createLargeIconBitmap(this, notification.appIdentifier, 96)
-        val resolvedAppName = notification.appDisplayName?.ifEmpty { null } ?: appName ?: brandInfo.displayName
-        val smallIconResId = brandInfo.iconResId ?: AppIconMapper.getIconResId(notification.appIdentifier, notification.categoryId)
-        Log.d(TAG, "Brand resolved for '${notification.appIdentifier}': '${brandInfo.displayName}', primaryColor=${Integer.toHexString(brandInfo.primaryColorHex)}")
+        val resolvedAppName = notification.appDisplayName?.ifEmpty { null } ?: appName ?: brandMeta.displayName
+        val smallIconResId = brandMeta.iconRes
+        Log.d(TAG, "Brand resolved for '${notification.appIdentifier}': '${brandMeta.displayName}', primaryColor=${Integer.toHexString(brandMeta.primaryColor)}")
         val notifId = notificationIdForUid(notification.uid)
 
         val contentIntent = PendingIntent.getActivity(
@@ -562,14 +567,17 @@ class AncsService : Service() {
         )
 
         // Layout: contentTitle = sender, contentText = message preview, subText = resolved brand name
-        val senderName = notification.title.ifEmpty { notification.appDisplayName ?: brandInfo.displayName }
+        val rawTitle = notification.title.ifEmpty { notification.appDisplayName ?: brandMeta.displayName }
+        val resolvedTitle = com.wearos.ancsbridge.contacts.ContactRepository.getInstance(this).resolveContactName(rawTitle)
+        val senderName = resolvedTitle ?: rawTitle
         val messagePreview = notification.message.ifEmpty { notification.subtitle ?: "" }
         val notifTime = parseAncsDate(notification.date)
 
         val builder = NotificationCompat.Builder(this, channelId)
             .setSmallIcon(smallIconResId)
             .setLargeIcon(largeIconBitmap)
-            .setColor(brandInfo.primaryColorHex)
+            .setColor(brandMeta.accentColor)
+            .setColorized(true)
             .setContentTitle(senderName)
             .setContentText(messagePreview)
             .setSubText(resolvedAppName)
@@ -580,11 +588,7 @@ class AncsService : Service() {
             .setContentIntent(contentIntent)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(androidCategory(notification.categoryId))
-            // Each notification gets a unique group key to prevent Android's auto-grouping.
-            // Auto-grouping adds SILENT flag via GROUP_ALERT_SUMMARY which kills
-            // heads-up overlays, vibration, and sound on ALL child notifications.
-            .setGroup("ancs_${notification.uid}")
-            .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_ALL)
+            // Standalone card on Wear OS notification stream: omit .setGroup() so Android never auto-bundles cards
             .setSound(android.provider.Settings.System.DEFAULT_NOTIFICATION_URI)
 
         // MessagingStyle — Samsung One UI Watch renders this with message body
@@ -661,7 +665,9 @@ class AncsService : Service() {
 
     @SuppressLint("WakelockTimeout")
     private fun showIncomingCall(notification: AncsNotification) {
-        val callerName = notification.title.ifEmpty { "Incoming Call" }
+        val rawCaller = notification.title.ifEmpty { "Incoming Call" }
+        val resolvedCaller = com.wearos.ancsbridge.contacts.ContactRepository.getInstance(this).resolveContactName(rawCaller)
+        val callerName = resolvedCaller ?: rawCaller
         val appName = notification.appDisplayName ?: "Phone"
 
         // Track active call UID to avoid duplicate showIncomingCall calls
@@ -763,6 +769,14 @@ class AncsService : Service() {
      */
     fun sendQuickReply(notificationUid: Int, replyText: String): Boolean {
         return connectionManager.sendQuickReply(notificationUid, replyText)
+    }
+
+    /**
+     * Send ping/ring command to iPhone companion app over Channel 0x01.
+     */
+    fun ringiPhone(): Boolean {
+        val payload = "{\"cmd\":\"RING_IPHONE\"}".toByteArray(Charsets.UTF_8)
+        return connectionManager.sendChannelPayload(com.wearos.ancsbridge.ble.BLEPacketMultiplexer.CHANNEL_PING_CONTROL, payload)
     }
 
     /**

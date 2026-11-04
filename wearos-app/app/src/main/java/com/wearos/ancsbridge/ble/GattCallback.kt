@@ -24,7 +24,9 @@ class GattCallback(
     private val onMtuChanged: (Int, Int) -> Unit,
     private val onCharacteristicReadCallback: ((BluetoothGattCharacteristic, ByteArray) -> Unit)? = null,
     private val onCallStateChanged: ((ByteArray) -> Unit)? = null,
-    private val onCompanionDataReceived: ((ByteArray) -> Unit)? = null
+    private val onCompanionDataReceived: ((ByteArray) -> Unit)? = null,
+    private val onAmsEntityUpdate: ((ByteArray) -> Unit)? = null,
+    private val onAmsRemoteCommandsUpdate: ((ByteArray) -> Unit)? = null
 ) : BluetoothGattCallback() {
 
     companion object {
@@ -90,6 +92,14 @@ class GattCallback(
                 Log.d(TAG, "Companion Quick Reply/Multiplexer: ${data.size} bytes")
                 onCompanionDataReceived?.invoke(data)
             }
+            AncsConstants.AMS_ENTITY_UPDATE_UUID.toString().uppercase() -> {
+                Log.d(TAG, "AMS Entity Update: ${data.size} bytes")
+                onAmsEntityUpdate?.invoke(data)
+            }
+            AncsConstants.AMS_REMOTE_COMMAND_UUID.toString().uppercase() -> {
+                Log.d(TAG, "AMS Remote Commands updated: ${data.size} bytes")
+                onAmsRemoteCommandsUpdate?.invoke(data)
+            }
             else -> {
                 Log.d(TAG, "Unknown characteristic changed: $uuid")
             }
@@ -124,6 +134,18 @@ class GattCallback(
         if (status == BluetoothGatt.GATT_SUCCESS) {
             val value = characteristic.value ?: return
             Log.d(TAG, "Characteristic read: ${characteristic.uuid} (${value.size} bytes)")
+            onCharacteristicReadCallback?.invoke(characteristic, value)
+        }
+    }
+
+    override fun onCharacteristicRead(
+        gatt: BluetoothGatt,
+        characteristic: BluetoothGattCharacteristic,
+        value: ByteArray,
+        status: Int
+    ) {
+        if (status == BluetoothGatt.GATT_SUCCESS) {
+            Log.d(TAG, "Characteristic read (API 33+): ${characteristic.uuid} (${value.size} bytes)")
             onCharacteristicReadCallback?.invoke(characteristic, value)
         }
     }

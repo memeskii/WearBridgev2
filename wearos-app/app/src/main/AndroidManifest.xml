@@ -105,8 +105,40 @@
         </receiver>
 
         <receiver
+            android:name=".installer.AppUpdateRestartReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
             android:name=".ancs.NotificationActionReceiver"
             android:exported="false" />
+
+        <receiver
+            android:name=".installer.WatchFaceInstallReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.wearos.ancsbridge.ACTION_INSTALL_STATUS" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".installer.AppUpdateRestartReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".installer.AppUpdateRestartReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <provider
             android:name="androidx.core.content.FileProvider"

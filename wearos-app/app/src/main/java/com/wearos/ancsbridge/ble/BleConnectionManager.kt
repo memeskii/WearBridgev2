@@ -94,12 +94,55 @@ class BleConnectionManager(private val context: Context) {
     private var controlPointChar: BluetoothGattCharacteristic? = null
     private var dataSourceChar: BluetoothGattCharacteristic? = null
 
+    private val amsManager = com.wearos.ancsbridge.media.AmsMediaManager.getInstance(context)
+    private val mediaRepo = com.wearos.ancsbridge.media.MediaPlayerRepository.getInstance(context)
+
     init {
         multiplexer.outboundChunkWriter = { chunk ->
             enqueueCompanionWrite(chunk)
         }
         multiplexer.onPayloadReceived = { channel, payload ->
             handleMultiplexerPayload(channel, payload)
+        }
+        com.wearos.ancsbridge.health.HealthTelemetryManager.getInstance(context).outboundDataDispatcher = { channel, data ->
+            val mtu = (negotiatedMtu - 3).coerceAtLeast(20)
+            val chunks = multiplexer.createChunks(channel, data, mtu)
+            for (chunk in chunks) {
+                enqueueCompanionWrite(chunk)
+            }
+        }
+        mediaRepo.outboundChannelSender = { channel, data ->
+            val mtu = (negotiatedMtu - 3).coerceAtLeast(20)
+            val chunks = multiplexer.createChunks(channel, data, mtu)
+            for (chunk in chunks) {
+                enqueueCompanionWrite(chunk)
+            }
+            true
+        }
+        com.wearos.ancsbridge.messages.MessageReplyManager.getInstance(context).outboundReplyDispatcher = { data ->
+            val mtu = (negotiatedMtu - 3).coerceAtLeast(20)
+            val chunks = multiplexer.createChunks(BLEPacketMultiplexer.CHANNEL_MESSAGE_REPLY, data, mtu)
+            for (chunk in chunks) {
+                enqueueCompanionWrite(chunk)
+            }
+            true
+        }
+        com.wearos.ancsbridge.filetransfer.FileTransferManager.getInstance(context).outboundPacketSender = { data ->
+            val mtu = (negotiatedMtu - 3).coerceAtLeast(20)
+            val chunks = multiplexer.createChunks(BLEPacketMultiplexer.CHANNEL_BINARY_FILE, data, mtu)
+            for (chunk in chunks) {
+                enqueueCompanionWrite(chunk)
+            }
+        }
+        amsManager.outboundWriteHandler = { char, data ->
+            val gatt = this@BleConnectionManager.gatt
+            if (gatt != null) {
+                char.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                char.value = data
+                gatt.writeCharacteristic(char)
+            } else {
+                false
+            }
         }
     }
 
@@ -180,6 +223,18 @@ class BleConnectionManager(private val context: Context) {
             Log.i(TAG, "ANCS service found!")
             serviceDiscoveryRetries = 0
 
+            // Also discover Apple Media Service (AMS)
+            val amsService = gatt.getService(AncsConstants.AMS_SERVICE_UUID)
+            if (amsService != null) {
+                Log.i(TAG, "Apple Media Service (AMS) found!")
+                val remoteCmd = amsService.getCharacteristic(AncsConstants.AMS_REMOTE_COMMAND_UUID)
+                val entityUpd = amsService.getCharacteristic(AncsConstants.AMS_ENTITY_UPDATE_UUID)
+                val entityAttr = amsService.getCharacteristic(AncsConstants.AMS_ENTITY_ATTRIBUTE_UUID)
+                amsManager.onAmsServiceDiscovered(gatt, remoteCmd, entityUpd, entityAttr)
+            } else {
+                Log.d(TAG, "Apple Media Service (AMS) not found on device")
+            }
+
             // If already subscribed (rediscovery for companion service), check companion and flush queue
             if (notificationSourceChar != null && dataSourceChar != null) {
                 Log.i(TAG, "ANCS already subscribed, checking companion service")
@@ -239,7 +294,18 @@ class BleConnectionManager(private val context: Context) {
                         subscribeToCallState()
                         delay(300)
                         subscribeToCompanionCharacteristic()
+                        delay(300)
+                        subscribeToAmsEntityUpdate()
+                        delay(300)
+                        subscribeToAmsRemoteCommand()
                     }
+                }
+                AncsConstants.AMS_ENTITY_UPDATE_UUID -> {
+                    Log.i(TAG, "Subscribed to AMS Entity Update notifications — sending entity subscriptions!")
+                    amsManager.subscribeToEntityUpdates()
+                }
+                AncsConstants.AMS_REMOTE_COMMAND_UUID -> {
+                    Log.i(TAG, "Subscribed to AMS Remote Command notifications!")
                 }
             }
 
@@ -252,7 +318,11 @@ class BleConnectionManager(private val context: Context) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 Log.e(TAG, "Characteristic write failed: $status for ${characteristic.uuid}")
             } else {
-                Log.i(TAG, "Companion write confirmed for ${characteristic.uuid}")
+                Log.i(TAG, "Characteristic write confirmed for ${characteristic.uuid}")
+                if (characteristic.uuid == AncsConstants.AMS_ENTITY_ATTRIBUTE_UUID) {
+                    Log.d(TAG, "AMS Entity Attribute write confirmed, triggering read")
+                    amsManager.triggerEntityAttributeRead()
+                }
             }
             processCharacteristicWriteQueue()
         },
@@ -263,13 +333,23 @@ class BleConnectionManager(private val context: Context) {
             gatt?.discoverServices()
         },
         onCharacteristicReadCallback = { characteristic, value ->
-            onCharacteristicRead(characteristic.uuid, value)
+            if (characteristic.uuid == AncsConstants.AMS_ENTITY_ATTRIBUTE_UUID) {
+                amsManager.handleEntityAttributeRead(value)
+            } else {
+                onCharacteristicRead(characteristic.uuid, value)
+            }
         },
         onCallStateChanged = { data ->
             _callStateEvents.tryEmit(data)
         },
         onCompanionDataReceived = { data ->
             handleCompanionData(data)
+        },
+        onAmsEntityUpdate = { data ->
+            amsManager.handleEntityUpdate(data)
+        },
+        onAmsRemoteCommandsUpdate = { data ->
+            amsManager.handleSupportedCommandsUpdate(data)
         }
     )
 
@@ -291,13 +371,33 @@ class BleConnectionManager(private val context: Context) {
                     handleMockCallState(str)
                 } else if (str.contains("\"type\":\"alert\"")) {
                     handleAlertPacket(str)
+                } else if (str.contains("OTA_UPDATE_URL")) {
+                    com.wearos.ancsbridge.installer.WatchOtaUpdater.getInstance(context).handleOtaCommand(str)
                 }
             }
             BLEPacketMultiplexer.CHANNEL_MESSAGE_REPLY -> {
                 Log.i(TAG, "Multiplexer Reply received: ${payload.size} bytes")
+                com.wearos.ancsbridge.messages.MessageReplyManager.getInstance(context).handleInboundChannelPayload(payload)
+            }
+            BLEPacketMultiplexer.CHANNEL_CONTACTS_JSON -> {
+                Log.i(TAG, "Multiplexer Contacts payload received: ${payload.size} bytes")
+                com.wearos.ancsbridge.contacts.ContactRepository.getInstance(context).upsertContacts(payload)
+            }
+            BLEPacketMultiplexer.CHANNEL_WEATHER_JSON -> {
+                Log.i(TAG, "Multiplexer Weather payload received: ${payload.size} bytes")
+                com.wearos.ancsbridge.weather.WeatherRepository.getInstance(context).saveWeather(payload)
+            }
+            BLEPacketMultiplexer.CHANNEL_HEALTH_TELEMETRY_JSON -> {
+                Log.i(TAG, "Multiplexer Health Telemetry payload received: ${payload.size} bytes")
+                com.wearos.ancsbridge.health.HealthTelemetryManager.getInstance(context).handleInboundCommand(payload)
+            }
+            BLEPacketMultiplexer.CHANNEL_MEDIA_QOL -> {
+                Log.i(TAG, "Multiplexer Media QoL payload received: ${payload.size} bytes")
+                com.wearos.ancsbridge.media.MediaPlayerRepository.getInstance(context).handleMediaQoLPayload(payload)
             }
             BLEPacketMultiplexer.CHANNEL_BINARY_FILE -> {
-                Log.i(TAG, "Multiplexer File received and verified: ${payload.size} bytes")
+                Log.i(TAG, "Multiplexer File payload received: ${payload.size} bytes")
+                com.wearos.ancsbridge.filetransfer.FileTransferManager.getInstance(context).handleIncomingChannel07Payload(payload)
             }
         }
     }
@@ -305,8 +405,12 @@ class BleConnectionManager(private val context: Context) {
     private fun handleMockCallState(jsonStr: String) {
         try {
             val json = JSONObject(jsonStr)
-            val callerName = json.optString("callerName", "Jane Doe")
+            var callerName = json.optString("callerName", "Jane Doe")
             val phoneNumber = json.optString("phoneNumber", "+1 (555) 019-2834")
+            val resolved = com.wearos.ancsbridge.contacts.ContactRepository.getInstance(context).resolveContactName(phoneNumber)
+            if (!resolved.isNullOrEmpty()) {
+                callerName = resolved
+            }
             val state = json.optString("state", "RINGING")
 
             if (state.equals("RINGING", ignoreCase = true)) {
@@ -535,6 +639,34 @@ class BleConnectionManager(private val context: Context) {
         Log.i(TAG, "Subscribing to companion multiplexer characteristic 7F8A0003")
     }
 
+    fun subscribeToAmsEntityUpdate() {
+        val gatt = this.gatt ?: return
+        val service = gatt.getService(AncsConstants.AMS_SERVICE_UUID) ?: run {
+            Log.d(TAG, "subscribeToAmsEntityUpdate: AMS service not found")
+            return
+        }
+        val char = service.getCharacteristic(AncsConstants.AMS_ENTITY_UPDATE_UUID) ?: run {
+            Log.d(TAG, "subscribeToAmsEntityUpdate: Entity Update characteristic not found")
+            return
+        }
+        subscribeToCharacteristic(char)
+        Log.i(TAG, "Subscribing to AMS Entity Update characteristic 2F7CABCE")
+    }
+
+    fun subscribeToAmsRemoteCommand() {
+        val gatt = this.gatt ?: return
+        val service = gatt.getService(AncsConstants.AMS_SERVICE_UUID) ?: run {
+            Log.d(TAG, "subscribeToAmsRemoteCommand: AMS service not found")
+            return
+        }
+        val char = service.getCharacteristic(AncsConstants.AMS_REMOTE_COMMAND_UUID) ?: run {
+            Log.d(TAG, "subscribeToAmsRemoteCommand: Remote Command characteristic not found")
+            return
+        }
+        subscribeToCharacteristic(char)
+        Log.i(TAG, "Subscribing to AMS Remote Command notifications 9B3C81D8")
+    }
+
     // MARK: - Outbound Characteristic Writes (Quick Reply, Battery, Health)
 
     @Synchronized
@@ -633,6 +765,19 @@ class BleConnectionManager(private val context: Context) {
     fun sendQuickReply(notificationUid: Int, replyText: String): Boolean {
         val payload = "REPLY:$notificationUid:$replyText".toByteArray(Charsets.UTF_8)
         return enqueueCompanionWrite(payload)
+    }
+
+    /**
+     * Send payload over any multiplexer channel to the companion app.
+     */
+    fun sendChannelPayload(channel: Byte, data: ByteArray): Boolean {
+        val mtu = (negotiatedMtu - 3).coerceAtLeast(20)
+        val chunks = multiplexer.createChunks(channel, data, mtu)
+        var success = true
+        for (chunk in chunks) {
+            if (!enqueueCompanionWrite(chunk)) success = false
+        }
+        return success
     }
 
     /**
@@ -771,6 +916,7 @@ class BleConnectionManager(private val context: Context) {
         characteristicWriteQueue.clear()
         isWritingDescriptor = false
         isWritingCharacteristic = false
+        amsManager.reset()
     }
 
     fun destroy() {

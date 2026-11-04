@@ -159,7 +159,7 @@ class HealthKitManager: ObservableObject {
         // 2. Commit Step Delta to HealthKit
         let stepDelta = steps - lastSyncedSteps
         if stepDelta > 0 {
-            saveStepDelta(delta: stepDelta)
+            saveStepDelta(delta: stepDelta, dateKey: today)
             userDefaults.set(steps, forKey: keyLastSyncedSteps)
         }
 
@@ -176,7 +176,7 @@ class HealthKitManager: ObservableObject {
         // 5. Commit Active Calorie Delta to HealthKit
         let activeKcalDelta = activeKcal - lastSyncedActiveKcal
         if activeKcalDelta > 0 {
-            saveActiveEnergyDelta(kcalDelta: activeKcalDelta)
+            saveActiveEnergyDelta(kcalDelta: activeKcalDelta, dateKey: today)
             userDefaults.set(activeKcal, forKey: keyLastSyncedActiveKcal)
         }
 
@@ -184,7 +184,7 @@ class HealthKitManager: ObservableObject {
         if restingKcal > 0 {
             let restingKcalDelta = restingKcal - lastSyncedRestingKcal
             if restingKcalDelta > 0 {
-                saveRestingEnergyDelta(kcalDelta: restingKcalDelta)
+                saveRestingEnergyDelta(kcalDelta: restingKcalDelta, dateKey: today)
                 userDefaults.set(restingKcal, forKey: keyLastSyncedRestingKcal)
             }
         }
@@ -200,20 +200,31 @@ class HealthKitManager: ObservableObject {
         }
     }
 
-    private func saveStepDelta(delta: Int) {
+    private func saveStepDelta(delta: Int, dateKey: String) {
         guard isHealthKitAvailable else { return }
         guard let stepType = HKQuantityType.quantityType(forIdentifier: .stepCount) else { return }
 
         let now = Date()
         let start = now.addingTimeInterval(-60)
         let quantity = HKQuantity(unit: .count(), doubleValue: Double(delta))
-        let sample = HKQuantitySample(type: stepType, quantity: quantity, start: start, end: now)
+
+        let syncVersionKey = "HealthKit_Step_SyncVer_\(dateKey)"
+        let version = userDefaults.integer(forKey: syncVersionKey) + 1
+        userDefaults.set(version, forKey: syncVersionKey)
+
+        var metadata: [String: Any] = [:]
+        if #available(iOS 11.0, *) {
+            metadata[HKMetadataKeySyncIdentifier] = "wearbridge_step_\(dateKey)_\(version)"
+            metadata[HKMetadataKeySyncVersion] = version
+        }
+
+        let sample = HKQuantitySample(type: stepType, quantity: quantity, start: start, end: now, metadata: metadata.isEmpty ? nil : metadata)
 
         healthStore.save(sample) { [weak self] success, error in
             if let error = error {
                 self?.logger.warning("Could not write step delta (\(delta)): \(error.localizedDescription)")
             } else {
-                self?.logger.info("Successfully committed +\(delta) steps to Apple Health")
+                self?.logger.info("Successfully committed +\(delta) steps to Apple Health (ver: \(version))")
             }
         }
     }
@@ -254,38 +265,60 @@ class HealthKitManager: ObservableObject {
         }
     }
 
-    private func saveActiveEnergyDelta(kcalDelta: Int) {
+    private func saveActiveEnergyDelta(kcalDelta: Int, dateKey: String) {
         guard isHealthKitAvailable else { return }
         guard let energyType = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned) else { return }
 
         let now = Date()
         let start = now.addingTimeInterval(-60)
         let quantity = HKQuantity(unit: .kilocalorie(), doubleValue: Double(kcalDelta))
-        let sample = HKQuantitySample(type: energyType, quantity: quantity, start: start, end: now)
+
+        let syncVersionKey = "HealthKit_ActiveCal_SyncVer_\(dateKey)"
+        let version = userDefaults.integer(forKey: syncVersionKey) + 1
+        userDefaults.set(version, forKey: syncVersionKey)
+
+        var metadata: [String: Any] = [:]
+        if #available(iOS 11.0, *) {
+            metadata[HKMetadataKeySyncIdentifier] = "wearbridge_cal_\(dateKey)"
+            metadata[HKMetadataKeySyncVersion] = version
+        }
+
+        let sample = HKQuantitySample(type: energyType, quantity: quantity, start: start, end: now, metadata: metadata.isEmpty ? nil : metadata)
 
         healthStore.save(sample) { [weak self] success, error in
             if let error = error {
                 self?.logger.warning("Could not write active kcal delta (\(kcalDelta)): \(error.localizedDescription)")
             } else {
-                self?.logger.info("Successfully committed +\(kcalDelta) active kcal to Apple Health")
+                self?.logger.info("Successfully committed +\(kcalDelta) active kcal to Apple Health (ver: \(version))")
             }
         }
     }
 
-    private func saveRestingEnergyDelta(kcalDelta: Int) {
+    private func saveRestingEnergyDelta(kcalDelta: Int, dateKey: String) {
         guard isHealthKitAvailable else { return }
         guard let energyType = HKQuantityType.quantityType(forIdentifier: .basalEnergyBurned) else { return }
 
         let now = Date()
         let start = now.addingTimeInterval(-60)
         let quantity = HKQuantity(unit: .kilocalorie(), doubleValue: Double(kcalDelta))
-        let sample = HKQuantitySample(type: energyType, quantity: quantity, start: start, end: now)
+
+        let syncVersionKey = "HealthKit_RestingCal_SyncVer_\(dateKey)"
+        let version = userDefaults.integer(forKey: syncVersionKey) + 1
+        userDefaults.set(version, forKey: syncVersionKey)
+
+        var metadata: [String: Any] = [:]
+        if #available(iOS 11.0, *) {
+            metadata[HKMetadataKeySyncIdentifier] = "wearbridge_basal_cal_\(dateKey)"
+            metadata[HKMetadataKeySyncVersion] = version
+        }
+
+        let sample = HKQuantitySample(type: energyType, quantity: quantity, start: start, end: now, metadata: metadata.isEmpty ? nil : metadata)
 
         healthStore.save(sample) { [weak self] success, error in
             if let error = error {
                 self?.logger.warning("Could not write basal energy delta (\(kcalDelta)): \(error.localizedDescription)")
             } else {
-                self?.logger.info("Successfully committed +\(kcalDelta) resting kcal to Apple Health")
+                self?.logger.info("Successfully committed +\(kcalDelta) resting kcal to Apple Health (ver: \(version))")
             }
         }
     }

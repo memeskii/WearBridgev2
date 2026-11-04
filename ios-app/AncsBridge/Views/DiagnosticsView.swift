@@ -19,6 +19,24 @@ struct DiagnosticsView: View {
     @State private var loopbackLoading = false
     @State private var loopbackResult: String? = nil
 
+    @State private var syncLoading = false
+    @State private var syncResult: String? = nil
+
+    @State private var telemetryLoading = false
+    @State private var telemetryResult: String? = nil
+    @State private var telemetryDetail: HealthTelemetryPayload? = nil
+
+    @State private var mediaQoLLoading = false
+    @State private var mediaQoLResult: String? = nil
+
+    @State private var selectedMockBundleId: String = AppBrandRegistry.bundleWhatsApp
+    @State private var mockMessageLoading = false
+    @State private var mockMessageResult: String? = nil
+
+    @State private var apkTransferLoading = false
+    @State private var apkTransferResult: String? = nil
+    @ObservedObject private var fileTransferManager = FileTransferManager.shared
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -28,6 +46,9 @@ struct DiagnosticsView: View {
 
                     // Test Harness Action Buttons
                     testHarnessSection
+
+                    // App Brand Registry Visual Catalog
+                    appBrandRegistrySection
 
                     // Live Packet Multiplexer Log
                     livePacketLogSection
@@ -224,7 +245,77 @@ struct DiagnosticsView: View {
 
                 Divider()
 
-                // 4. Test 100KB File Transfer (0x07)
+                // 4a. High-Throughput Watch Face APK Transfer (0x07)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        ZStack {
+                            Circle()
+                                .fill(Color.purple.opacity(0.15))
+                                .frame(width: 36, height: 36)
+                            Image(systemName: "shippingbox.fill")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.purple)
+                        }
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Test Mock Watch Face APK (0x07)")
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+                            Text("Windowed streaming (32KB chunks) + SHA-256 verification")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+
+                        Spacer()
+
+                        Button {
+                            runApkTransferTest()
+                        } label: {
+                            if apkTransferLoading || fileTransferManager.isTransferring {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                            } else {
+                                Text("Push APK")
+                                    .font(.subheadline)
+                                    .fontWeight(.bold)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                                    .background(Color.purple)
+                                    .foregroundColor(.white)
+                                    .clipShape(Capsule())
+                            }
+                        }
+                        .disabled(apkTransferLoading || fileTransferManager.isTransferring)
+                    }
+
+                    if fileTransferManager.isTransferring {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ProgressView(value: fileTransferManager.transferProgress, total: 1.0)
+                                .tint(.purple)
+                            HStack {
+                                Text(fileTransferManager.transferStatusText)
+                                Spacer()
+                                Text(String(format: "%.1f KB/s", fileTransferManager.transferSpeedKBps))
+                                    .bold()
+                            }
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        }
+                    } else if let result = apkTransferResult {
+                        HStack {
+                            Image(systemName: result.contains("Verified") ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                                .foregroundColor(result.contains("Verified") ? .green : .red)
+                            Text(result)
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(result.contains("Verified") ? .green : .red)
+                        }
+                    }
+                }
+
+                Divider()
+
+                // 4b. Legacy 100KB Random Binary Transfer (0x07)
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         ZStack {
@@ -237,10 +328,10 @@ struct DiagnosticsView: View {
                         }
 
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Test 100KB File Transfer (0x07)")
+                            Text("Test 100KB Binary Loop (0x07)")
                                 .font(.subheadline)
                                 .fontWeight(.semibold)
-                            Text("Streams 100KB with trailing CRC32 and verifies watch ACK")
+                            Text("Legacy CRC32 throughput benchmark")
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
                         }
@@ -259,7 +350,7 @@ struct DiagnosticsView: View {
                                     .fontWeight(.bold)
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 6)
-                                    .background(Color.purple)
+                                    .background(Color.purple.opacity(0.8))
                                     .foregroundColor(.white)
                                     .clipShape(Capsule())
                             }
@@ -283,14 +374,76 @@ struct DiagnosticsView: View {
 
                 Divider()
 
-                // 5. Test Reply Loopback (0x06)
+                // 5a. Send Mock Incoming Message to Watch (0x06)
+                VStack(alignment: .leading, spacing: 8) {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach([
+                                (AppBrandRegistry.bundleWhatsApp, "WhatsApp"),
+                                (AppBrandRegistry.bundleTikTokGlobal, "TikTok"),
+                                (AppBrandRegistry.bundleIMessage, "iMessage"),
+                                (AppBrandRegistry.bundleTelegram, "Telegram"),
+                                (AppBrandRegistry.bundleInstagram, "Instagram"),
+                                (AppBrandRegistry.bundleDiscord, "Discord")
+                            ], id: \.0) { bundleId, name in
+                                let brand = AppBrandRegistry.resolve(bundleId)
+                                Button {
+                                    selectedMockBundleId = bundleId
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: brand.sfSymbol)
+                                            .font(.system(size: 10))
+                                        Text(name)
+                                            .font(.caption2)
+                                    }
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(selectedMockBundleId == bundleId ? brand.primaryColor : Color(.systemGray5))
+                                    .foregroundColor(selectedMockBundleId == bundleId ? .white : .primary)
+                                    .cornerRadius(8)
+                                }
+                            }
+                        }
+                    }
+
+                    testRow(
+                        title: "Send Mock Message (\(AppBrandRegistry.resolve(selectedMockBundleId).displayName))",
+                        subtitle: "Injects synthetic message from \(selectedMockBundleId) into Watch Room inbox",
+                        icon: AppBrandRegistry.resolve(selectedMockBundleId).sfSymbol,
+                        color: AppBrandRegistry.resolve(selectedMockBundleId).primaryColor,
+                        isLoading: mockMessageLoading,
+                        resultText: mockMessageResult,
+                        resultColor: .green
+                    ) {
+                        mockMessageLoading = true
+                        mockMessageResult = nil
+                        let brand = AppBrandRegistry.resolve(selectedMockBundleId)
+                        viewModel.sendMockMessageToWatch(
+                            bundleId: selectedMockBundleId,
+                            senderName: "Sarah Connor",
+                            body: "Test notification via \(brand.displayName) over Channel 0x06"
+                        ) { result in
+                            mockMessageLoading = false
+                            switch result {
+                            case .success(let info):
+                                mockMessageResult = info
+                            case .failure(let err):
+                                mockMessageResult = "Err: \(err.localizedDescription)"
+                            }
+                        }
+                    }
+                }
+
+                Divider()
+
+                // 5b. Test Reply Loopback & Relay (0x06)
                 testRow(
                     title: "Test Reply Loopback (0x06)",
-                    subtitle: "Instructs watch to echo back a mock reply payload",
+                    subtitle: "Verifies MessageReplyPayload & ACK round-trip status (\(viewModel.replyRelayManager.relayMode.rawValue))",
                     icon: "arrow.counterclockwise.bubble.fill",
                     color: .orange,
                     isLoading: loopbackLoading,
-                    resultText: loopbackResult,
+                    resultText: loopbackResult ?? (viewModel.replyRelayManager.lastRelayStatus != "Idle" ? viewModel.replyRelayManager.lastRelayStatus : nil),
                     resultColor: .orange
                 ) {
                     loopbackLoading = true
@@ -299,9 +452,110 @@ struct DiagnosticsView: View {
                         loopbackLoading = false
                         switch result {
                         case .success(let echo):
-                            loopbackResult = "Echo: '\(echo)'"
+                            loopbackResult = "Echo: '\(echo)' (Relay: \(viewModel.replyRelayManager.lastRelayStatus))"
                         case .failure(let err):
                             loopbackResult = "Err: \(err.localizedDescription)"
+                        }
+                    }
+                }
+
+                Divider()
+
+                // 6. Force Sync Contacts & Weather (0x02 & 0x03)
+                testRow(
+                    title: "Force Sync Contacts & Weather",
+                    subtitle: "Sends full address book (0x02) and Open-Meteo forecast (0x03)",
+                    icon: "arrow.triangle.2.circlepath.circle.fill",
+                    color: .indigo,
+                    isLoading: syncLoading,
+                    resultText: syncResult,
+                    resultColor: .indigo
+                ) {
+                    syncLoading = true
+                    syncResult = nil
+                    viewModel.forceSyncContactsAndWeather { result in
+                        syncLoading = false
+                        switch result {
+                        case .success(let info):
+                            syncResult = info
+                        case .failure(let err):
+                            syncResult = "Err: \(err.localizedDescription)"
+                        }
+                    }
+                }
+
+                Divider()
+
+                // 7. Pull Watch Telemetry (0x04)
+                VStack(alignment: .leading, spacing: 8) {
+                    testRow(
+                        title: "Pull Watch Telemetry (0x04)",
+                        subtitle: "Requests 24h health metrics (Sleep, SpO2, Stress, Calories)",
+                        icon: "heart.text.square.fill",
+                        color: .red,
+                        isLoading: telemetryLoading,
+                        resultText: telemetryResult,
+                        resultColor: .red
+                    ) {
+                        telemetryLoading = true
+                        telemetryResult = nil
+                        telemetryDetail = nil
+                        viewModel.pullWatchHealthTelemetry { result in
+                            telemetryLoading = false
+                            switch result {
+                            case .success(let payload):
+                                telemetryDetail = payload
+                                telemetryResult = "\(payload.date): \(Int(payload.calories.total)) kcal, SpO2 \(payload.spo2.latest)%, Sleep \(payload.sleep.totalDurationMinutes)m, Stress \(payload.stress.stressScore)"
+                            case .failure(let err):
+                                telemetryResult = "Err: \(err.localizedDescription)"
+                            }
+                        }
+                    }
+
+                    if let d = telemetryDetail {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text("🔥 \(Int(d.calories.total)) kcal (Active: \(Int(d.calories.active)))")
+                                Spacer()
+                                Text("🫁 SpO2: \(d.spo2.latest)% (Avg: \(String(format: "%.1f", d.spo2.avg))%)")
+                            }
+                            HStack {
+                                Text("💤 Sleep: \(d.sleep.totalDurationMinutes)m (Score: \(d.sleep.sleepScore))")
+                                Spacer()
+                                Text("🧘 Stress: \(d.stress.stressScore) (HRV: \(String(format: "%.1f", d.stress.hrvRmssd))ms)")
+                            }
+                            Text("Deep: \(d.sleep.deepMinutes)m | REM: \(d.sleep.remMinutes)m | Light: \(d.sleep.lightMinutes)m | Awake: \(d.sleep.awakeMinutes)m")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        .font(.caption)
+                        .padding(8)
+                        .background(Color.red.opacity(0.08))
+                        .cornerRadius(8)
+                    }
+                }
+
+                Divider()
+
+                // 8. Test Media QoL Push (0x05)
+                testRow(
+                    title: "Test Media QoL Push (0x05)",
+                    subtitle: "Sends mock 96x96 cover art, audio route, and duration over Channel 0x05",
+                    icon: "music.note.tv.fill",
+                    color: .teal,
+                    isLoading: mediaQoLLoading,
+                    resultText: mediaQoLResult,
+                    resultColor: .teal
+                ) {
+                    mediaQoLLoading = true
+                    mediaQoLResult = nil
+                    viewModel.testMediaQoLPush { result in
+                        mediaQoLLoading = false
+                        switch result {
+                        case .success(let info):
+                            mediaQoLResult = info
+                        case .failure(let err):
+                            mediaQoLResult = "Err: \(err.localizedDescription)"
                         }
                     }
                 }
@@ -371,6 +625,21 @@ struct DiagnosticsView: View {
         }
     }
 
+    private func runApkTransferTest() {
+        apkTransferLoading = true
+        apkTransferResult = nil
+
+        viewModel.testMockWatchFaceApkTransfer { result in
+            apkTransferLoading = false
+            switch result {
+            case .success(let savedPath):
+                apkTransferResult = "Verified: \(URL(fileURLWithPath: savedPath).lastPathComponent)"
+            case .failure(let err):
+                apkTransferResult = "Failed: \(err.localizedDescription)"
+            }
+        }
+    }
+
     private func runFileTransferTest() {
         fileTransferLoading = true
         fileTransferProgress = 0.0
@@ -391,6 +660,80 @@ struct DiagnosticsView: View {
                 }
             }
         )
+    }
+
+    // MARK: - App Brand Registry Catalog
+    private var appBrandRegistrySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: "square.grid.2x2.fill")
+                    .foregroundColor(.pink)
+                Text("App Brand Registry Mappings")
+                    .font(.subheadline)
+                    .fontWeight(.bold)
+                    .foregroundColor(.secondary)
+
+                Spacer()
+
+                Text("v2.0.0 Spec")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.pink.opacity(0.12))
+                    .foregroundColor(.pink)
+                    .cornerRadius(4)
+            }
+
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                ForEach([
+                    AppBrandRegistry.bundleTikTokGlobal,
+                    AppBrandRegistry.bundleTikTokAme,
+                    AppBrandRegistry.bundleWhatsApp,
+                    AppBrandRegistry.bundleInstagram,
+                    AppBrandRegistry.bundleThreads,
+                    AppBrandRegistry.bundleTelegram,
+                    AppBrandRegistry.bundleMessenger,
+                    AppBrandRegistry.bundleDiscord,
+                    AppBrandRegistry.bundleSnapchat,
+                    AppBrandRegistry.bundleXTwitter,
+                    AppBrandRegistry.bundleSpotify,
+                    AppBrandRegistry.bundleYouTube,
+                    AppBrandRegistry.bundleMusic,
+                    AppBrandRegistry.bundleIMessage,
+                    AppBrandRegistry.bundlePhone,
+                    AppBrandRegistry.bundleFaceTime
+                ], id: \.self) { bundleId in
+                    let brand = AppBrandRegistry.resolve(bundleId)
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(brand.primaryColor.opacity(0.15))
+                            .frame(width: 28, height: 28)
+                            .overlay(
+                                Image(systemName: brand.sfSymbol)
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(brand.primaryColor)
+                            )
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(brand.displayName)
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                            Text(bundleId.components(separatedBy: ".").last ?? bundleId)
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                        }
+                        Spacer()
+                    }
+                    .padding(6)
+                    .background(Color(uiColor: .tertiarySystemGroupedBackground))
+                    .cornerRadius(8)
+                }
+            }
+        }
+        .padding(14)
+        .background(Color(uiColor: .secondarySystemGroupedBackground))
+        .cornerRadius(14)
+        .shadow(color: .black.opacity(0.04), radius: 6, y: 2)
     }
 
     // MARK: - Live Packet Multiplexer Log

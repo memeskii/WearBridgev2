@@ -116,6 +116,20 @@ class BLEClientService(private val context: Context) {
         multiplexer.onPayloadReceived = { channel, payload ->
             handleMultiplexerPayload(channel, payload)
         }
+        com.wearos.ancsbridge.health.HealthTelemetryManager.getInstance(context).outboundDataDispatcher = { channel, data ->
+            val mtu = (negotiatedMtu - 3).coerceAtLeast(20)
+            val chunks = multiplexer.createChunks(channel, data, mtu)
+            for (chunk in chunks) {
+                enqueueCompanionWrite(chunk)
+            }
+        }
+        com.wearos.ancsbridge.filetransfer.FileTransferManager.getInstance(context).outboundPacketSender = { data ->
+            val mtu = (negotiatedMtu - 3).coerceAtLeast(20)
+            val chunks = multiplexer.createChunks(BLEPacketMultiplexer.CHANNEL_BINARY_FILE, data, mtu)
+            for (chunk in chunks) {
+                enqueueCompanionWrite(chunk)
+            }
+        }
     }
 
     val bondStateReceiver = BondStateReceiver(
@@ -288,13 +302,35 @@ class BLEClientService(private val context: Context) {
                     handleMockCallState(str)
                 } else if (str.contains("\"type\":\"alert\"")) {
                     handleAlertPacket(str)
+                } else if (str.contains("OTA_UPDATE_URL")) {
+                    com.wearos.ancsbridge.installer.WatchOtaUpdater.getInstance(context).handleOtaCommand(str)
+                } else if (str.contains("GET_VERSION")) {
+                    sendWatchVersionReport()
                 }
             }
             BLEPacketMultiplexer.CHANNEL_MESSAGE_REPLY -> {
                 Log.i(TAG, "Multiplexer Reply received: ${payload.size} bytes")
+                com.wearos.ancsbridge.messages.MessageReplyManager.getInstance(context).handleInboundChannelPayload(payload)
+            }
+            BLEPacketMultiplexer.CHANNEL_CONTACTS_JSON -> {
+                Log.i(TAG, "Multiplexer Contacts payload received: ${payload.size} bytes")
+                com.wearos.ancsbridge.contacts.ContactRepository.getInstance(context).upsertContacts(payload)
+            }
+            BLEPacketMultiplexer.CHANNEL_WEATHER_JSON -> {
+                Log.i(TAG, "Multiplexer Weather payload received: ${payload.size} bytes")
+                com.wearos.ancsbridge.weather.WeatherRepository.getInstance(context).saveWeather(payload)
+            }
+            BLEPacketMultiplexer.CHANNEL_HEALTH_TELEMETRY_JSON -> {
+                Log.i(TAG, "Multiplexer Health Telemetry payload received: ${payload.size} bytes")
+                com.wearos.ancsbridge.health.HealthTelemetryManager.getInstance(context).handleInboundCommand(payload)
+            }
+            BLEPacketMultiplexer.CHANNEL_MEDIA_QOL -> {
+                Log.i(TAG, "Multiplexer Media QoL payload received: ${payload.size} bytes")
+                com.wearos.ancsbridge.media.MediaPlayerRepository.getInstance(context).handleMediaQoLPayload(payload)
             }
             BLEPacketMultiplexer.CHANNEL_BINARY_FILE -> {
-                Log.i(TAG, "Multiplexer File received and verified: ${payload.size} bytes")
+                Log.i(TAG, "Multiplexer File payload received: ${payload.size} bytes")
+                com.wearos.ancsbridge.filetransfer.FileTransferManager.getInstance(context).handleIncomingChannel07Payload(payload)
             }
         }
     }
@@ -302,8 +338,12 @@ class BLEClientService(private val context: Context) {
     private fun handleMockCallState(jsonStr: String) {
         try {
             val json = JSONObject(jsonStr)
-            val callerName = json.optString("callerName", "Jane Doe")
+            var callerName = json.optString("callerName", "Jane Doe")
             val phoneNumber = json.optString("phoneNumber", "+1 (555) 019-2834")
+            val resolved = com.wearos.ancsbridge.contacts.ContactRepository.getInstance(context).resolveContactName(phoneNumber)
+            if (!resolved.isNullOrEmpty()) {
+                callerName = resolved
+            }
             val state = json.optString("state", "RINGING")
 
             if (state.equals("RINGING", ignoreCase = true)) {
@@ -322,6 +362,27 @@ class BLEClientService(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "Error handling mock call state: ${e.message}")
         }
+    }
+
+    fun sendWatchVersionReport() {
+        val pInfo = try {
+            context.packageManager.getPackageInfo(context.packageName, 0)
+        } catch (_: Exception) {
+            null
+        }
+        val verName = pInfo?.versionName ?: "2.0.0"
+        val verCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            pInfo?.longVersionCode ?: 200L
+        } else {
+            @Suppress("DEPRECATION")
+            (pInfo?.versionCode ?: 200).toLong()
+        }
+        val json = """{"cmd":"WATCH_VERSION_REPORT","versionName":"$verName","versionCode":$verCode,"packageName":"${context.packageName}"}"""
+        val chunks = multiplexer.createChunks(BLEPacketMultiplexer.CHANNEL_PING_CONTROL, json.toByteArray(Charsets.UTF_8), 508)
+        for (c in chunks) {
+            enqueueCompanionWrite(c)
+        }
+        Log.i(TAG, "Transmitted WATCH_VERSION_REPORT over Channel 0x01: v$verName (code $verCode)")
     }
 
     private fun handleAlertPacket(jsonStr: String) {

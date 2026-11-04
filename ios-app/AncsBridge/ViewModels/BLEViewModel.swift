@@ -267,6 +267,109 @@ class BLEViewModel: ObservableObject {
         serverManager.sendTestReplyLoopback(message: message, completion: completion)
     }
 
+    // MARK: - Contacts & Weather Sync
+    let contactsManager = ContactsSyncManager.shared
+    let weatherService = WeatherSyncService.shared
+
+    func forceSyncContactsAndWeather(completion: @escaping (Result<String, Error>) -> Void) {
+        let group = DispatchGroup()
+        var contactsCount = 0
+        var weatherCity = ""
+        var syncError: Error?
+
+        group.enter()
+        contactsManager.syncContacts(force: true) { result in
+            switch result {
+            case .success(let count):
+                contactsCount = count
+            case .failure(let err):
+                syncError = err
+            }
+            group.leave()
+        }
+
+        group.enter()
+        weatherService.syncWeather(force: true) { result in
+            switch result {
+            case .success(let payload):
+                weatherCity = payload.cityName
+            case .failure(let err):
+                if syncError == nil { syncError = err }
+            }
+            group.leave()
+        }
+
+        group.notify(queue: .main) {
+            if let error = syncError {
+                completion(.failure(error))
+            } else {
+                let msg = "Synced \(contactsCount) contacts & weather (\(weatherCity))"
+                completion(.success(msg))
+            }
+        }
+    }
+
+    // MARK: - Phase 3 Health Telemetry
+    let healthTelemetryManager = HealthTelemetryManager.shared
+
+    func pullWatchHealthTelemetry(completion: @escaping (Result<HealthTelemetryPayload, Error>) -> Void) {
+        healthTelemetryManager.pullTelemetry(completion: completion)
+    }
+
+    // MARK: - Phase 4 Media QoL
+    let mediaQoLManager = MediaQoLManager.shared
+
+    func testMediaQoLPush(completion: @escaping (Result<String, Error>) -> Void) {
+        mediaQoLManager.sendMockMediaQoLPayload(completion: completion)
+    }
+
+    // MARK: - Phase 5 Message Relay & Inbox Injection
+    let replyRelayManager = ReplyRelayManager.shared
+
+    func sendMockMessageToWatch(
+        bundleId: String = "net.whatsapp.WhatsApp",
+        senderName: String = "Sarah Connor",
+        body: String = "Are you ready for the deployment?",
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
+        let brand = AppBrandRegistry.resolve(bundleId)
+        replyRelayManager.sendSyntheticMessageToWatch(
+            appBundleId: bundleId,
+            appDisplayName: brand.displayName,
+            senderName: senderName,
+            senderIdentifier: "+1 (555) 019-2834",
+            body: body,
+            completion: completion
+        )
+    }
+
+    // MARK: - Phase 6 High-Throughput File Transfer & Watch Face Engine
+    let fileTransferManager = FileTransferManager.shared
+    let watchFaceStoreManager = WatchFaceStoreManager.shared
+
+    func testMockWatchFaceApkTransfer(completion: @escaping (Result<String, Error>) -> Void) {
+        var data = Data()
+        data.append(contentsOf: [0x50, 0x4B, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00])
+        let manifest = "{\"package\": \"com.wearbridge.watchface.mock\", \"version\": \"1.0.0\"}"
+        if let mData = manifest.data(using: .utf8) {
+            data.append(mData)
+        }
+        let total = 150 * 1024
+        let remaining = max(0, total - data.count)
+        var filler = [UInt8](repeating: 0, count: remaining)
+        for i in 0..<remaining {
+            filler[i] = UInt8((i * 41 + 19) & 0xFF)
+        }
+        data.append(contentsOf: filler)
+
+        fileTransferManager.startTransfer(
+            fileData: data,
+            fileName: "diagnostics_test.apk",
+            fileType: "WATCH_FACE",
+            completion: completion
+        )
+    }
+
     func clearPacketLogs() {
         serverManager.multiplexer.clearLogs()
     }

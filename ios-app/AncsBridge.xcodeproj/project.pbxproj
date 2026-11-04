@@ -9,8 +9,21 @@
 /* Begin PBXBuildFile section */
 		A1E300114C6F4E8A9B2D7F11 /* BLEPacketMultiplexer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E300104C6F4E8A9B2D7F10 /* BLEPacketMultiplexer.swift */; };
 		A1E300214C6F4E8A9B2D7F21 /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E300204C6F4E8A9B2D7F20 /* DiagnosticsView.swift */; };
+		A1E300314C6F4E8A9B2D7F31 /* ContactsSyncManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E300304C6F4E8A9B2D7F30 /* ContactsSyncManager.swift */; };
+		A1E300414C6F4E8A9B2D7F41 /* WeatherSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E300404C6F4E8A9B2D7F40 /* WeatherSyncService.swift */; };
 		A1E300024C6F4E8A9B2D7F02 /* BLEServerManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E300014C6F4E8A9B2D7F01 /* BLEServerManager.swift */; };
 		A1E300044C6F4E8A9B2D7F04 /* HealthKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E300034C6F4E8A9B2D7F03 /* HealthKitManager.swift */; };
+		A1E300514C6F4E8A9B2D7F51 /* HealthTelemetryModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E300504C6F4E8A9B2D7F50 /* HealthTelemetryModels.swift */; };
+		A1E300534C6F4E8A9B2D7F53 /* HealthTelemetryManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E300524C6F4E8A9B2D7F52 /* HealthTelemetryManager.swift */; };
+		A1E300614C6F4E8A9B2D7F61 /* MediaQoLManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E300604C6F4E8A9B2D7F60 /* MediaQoLManager.swift */; };
+		A1E300714C6F4E8A9B2D7F71 /* ReplyRelayManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E300704C6F4E8A9B2D7F70 /* ReplyRelayManager.swift */; };
+		A1E300814C6F4E8A9B2D7F81 /* FileTransferManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E300804C6F4E8A9B2D7F80 /* FileTransferManager.swift */; };
+		A1E300914C6F4E8A9B2D7F91 /* WatchFaceStoreManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E300904C6F4E8A9B2D7F90 /* WatchFaceStoreManager.swift */; };
+		A1E300944C6F4E8A9B2D7F94 /* WatchFaceBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E300934C6F4E8A9B2D7F93 /* WatchFaceBrowserView.swift */; };
+		A1E300A14C6F4E8A9B2D7FA1 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E300A04C6F4E8A9B2D7FA0 /* DashboardView.swift */; };
+		A1E300A34C6F4E8A9B2D7FA3 /* WatchFaceHubView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E300A24C6F4E8A9B2D7FA2 /* WatchFaceHubView.swift */; };
+		A1E300A54C6F4E8A9B2D7FA5 /* DeviceSyncView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E300A44C6F4E8A9B2D7FA4 /* DeviceSyncView.swift */; };
+		A1E300A94C6F4E8A9B2D7FA9 /* AppBrandRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E300A84C6F4E8A9B2D7FA8 /* AppBrandRegistry.swift */; };
 		0C1339CAF49308EE12D67173 /* BLEViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B64A6B42E55DCF830BD9501 /* BLEViewModel.swift */; };
 		0D89D3ECFF7D0E5DF95C362D /* BLEConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4027EE6B08DD2500C1BF6E94 /* BLEConstants.swift */; };
 		246322911A02C982C0331924 /* StatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 076673E488AFB468ED2E2EF9 /* StatusView.swift */; };
@@ -43,8 +56,20 @@
 /* Begin PBXFileReference section */
 		A1E300104C6F4E8A9B2D7F10 /* BLEPacketMultiplexer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLEPacketMultiplexer.swift; sourceTree = "<group>"; };
 		A1E300204C6F4E8A9B2D7F20 /* DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
+		A1E300304C6F4E8A9B2D7F30 /* ContactsSyncManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactsSyncManager.swift; sourceTree = "<group>"; };
+		A1E300404C6F4E8A9B2D7F40 /* WeatherSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WeatherSyncService.swift; sourceTree = "<group>"; };
 		A1E300014C6F4E8A9B2D7F01 /* BLEServerManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLEServerManager.swift; sourceTree = "<group>"; };
 		A1E300034C6F4E8A9B2D7F03 /* HealthKitManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthKitManager.swift; sourceTree = "<group>"; };
+		A1E300504C6F4E8A9B2D7F50 /* HealthTelemetryModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthTelemetryModels.swift; sourceTree = "<group>"; };
+		A1E300524C6F4E8A9B2D7F52 /* HealthTelemetryManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthTelemetryManager.swift; sourceTree = "<group>"; };
+		A1E300604C6F4E8A9B2D7F60 /* MediaQoLManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaQoLManager.swift; sourceTree = "<group>"; };
+		A1E300704C6F4E8A9B2D7F70 /* ReplyRelayManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplyRelayManager.swift; sourceTree = "<group>"; };
+		A1E300804C6F4E8A9B2D7F80 /* FileTransferManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTransferManager.swift; sourceTree = "<group>"; };
+		A1E300904C6F4E8A9B2D7F90 /* WatchFaceStoreManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchFaceStoreManager.swift; sourceTree = "<group>"; };
+		A1E300934C6F4E8A9B2D7F93 /* WatchFaceBrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchFaceBrowserView.swift; sourceTree = "<group>"; };
+		A1E300A04C6F4E8A9B2D7FA0 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
+		A1E300A24C6F4E8A9B2D7FA2 /* WatchFaceHubView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchFaceHubView.swift; sourceTree = "<group>"; };
+		A1E300A44C6F4E8A9B2D7FA4 /* DeviceSyncView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceSyncView.swift; sourceTree = "<group>"; };
 		03B56BE4BCAB856A9AFE50DB /* HowItWorksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HowItWorksView.swift; sourceTree = "<group>"; };
 		076673E488AFB468ED2E2EF9 /* StatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusView.swift; sourceTree = "<group>"; };
 		0C4E6DA939E59F8521934572 /* QuickReplySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickReplySettingsView.swift; sourceTree = "<group>"; };
@@ -78,6 +103,12 @@
 				523A43621478CD12C73CC964 /* Info-Generated.plist */,
 				E33384D451D23D1FDBB2AC6A /* BLE */,
 				A1E300054C6F4E8A9B2D7F05 /* Health */,
+				A1E300324C6F4E8A9B2D7F32 /* Contacts */,
+				A1E300424C6F4E8A9B2D7F42 /* Weather */,
+				A1E300624C6F4E8A9B2D7F62 /* Media */,
+				A1E300724C6F4E8A9B2D7F72 /* Messages */,
+				A1E300824C6F4E8A9B2D7F82 /* FileTransfer */,
+				A1E300924C6F4E8A9B2D7F92 /* WatchFaces */,
 				78951DEE32131D8A9C313205 /* Model */,
 				7CA157A73FDAF87BC06EFF4C /* Storage */,
 				E49B8E71FFD2920FFE74832C /* ViewModels */,
@@ -105,6 +136,9 @@
 				BE23C48EE7171805E83E7C74 /* SettingsView.swift */,
 				076673E488AFB468ED2E2EF9 /* StatusView.swift */,
 				A1E300204C6F4E8A9B2D7F20 /* DiagnosticsView.swift */,
+				A1E300A04C6F4E8A9B2D7FA0 /* DashboardView.swift */,
+				A1E300A24C6F4E8A9B2D7FA2 /* WatchFaceHubView.swift */,
+				A1E300A44C6F4E8A9B2D7FA4 /* DeviceSyncView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -156,12 +190,63 @@
 			path = BLE;
 			sourceTree = "<group>";
 		};
+		A1E300324C6F4E8A9B2D7F32 /* Contacts */ = {
+			isa = PBXGroup;
+			children = (
+				A1E300304C6F4E8A9B2D7F30 /* ContactsSyncManager.swift */,
+			);
+			path = Contacts;
+			sourceTree = "<group>";
+		};
+		A1E300424C6F4E8A9B2D7F42 /* Weather */ = {
+			isa = PBXGroup;
+			children = (
+				A1E300404C6F4E8A9B2D7F40 /* WeatherSyncService.swift */,
+			);
+			path = Weather;
+			sourceTree = "<group>";
+		};
 		A1E300054C6F4E8A9B2D7F05 /* Health */ = {
 			isa = PBXGroup;
 			children = (
 				A1E300034C6F4E8A9B2D7F03 /* HealthKitManager.swift */,
+				A1E300504C6F4E8A9B2D7F50 /* HealthTelemetryModels.swift */,
+				A1E300524C6F4E8A9B2D7F52 /* HealthTelemetryManager.swift */,
 			);
 			path = Health;
+			sourceTree = "<group>";
+		};
+		A1E300624C6F4E8A9B2D7F62 /* Media */ = {
+			isa = PBXGroup;
+			children = (
+				A1E300604C6F4E8A9B2D7F60 /* MediaQoLManager.swift */,
+			);
+			path = Media;
+			sourceTree = "<group>";
+		};
+		A1E300724C6F4E8A9B2D7F72 /* Messages */ = {
+			isa = PBXGroup;
+			children = (
+				A1E300704C6F4E8A9B2D7F70 /* ReplyRelayManager.swift */,
+			);
+			path = Messages;
+			sourceTree = "<group>";
+		};
+		A1E300824C6F4E8A9B2D7F82 /* FileTransfer */ = {
+			isa = PBXGroup;
+			children = (
+				A1E300804C6F4E8A9B2D7F80 /* FileTransferManager.swift */,
+			);
+			path = FileTransfer;
+			sourceTree = "<group>";
+		};
+		A1E300924C6F4E8A9B2D7F92 /* WatchFaces */ = {
+			isa = PBXGroup;
+			children = (
+				A1E300904C6F4E8A9B2D7F90 /* WatchFaceStoreManager.swift */,
+				A1E300934C6F4E8A9B2D7F93 /* WatchFaceBrowserView.swift */,
+			);
+			path = WatchFaces;
 			sourceTree = "<group>";
 		};
 		E49B8E71FFD2920FFE74832C /* ViewModels */ = {
@@ -268,11 +353,23 @@
 				A1E300024C6F4E8A9B2D7F02 /* BLEServerManager.swift in Sources */,
 				A1E300114C6F4E8A9B2D7F11 /* BLEPacketMultiplexer.swift in Sources */,
 				A1E300214C6F4E8A9B2D7F21 /* DiagnosticsView.swift in Sources */,
+				A1E300314C6F4E8A9B2D7F31 /* ContactsSyncManager.swift in Sources */,
+				A1E300414C6F4E8A9B2D7F41 /* WeatherSyncService.swift in Sources */,
 				0C1339CAF49308EE12D67173 /* BLEViewModel.swift in Sources */,
 				3444128F7B515916482238DB /* CallStateObserver.swift in Sources */,
 				BAF4F26B9E9AC17651F796F1 /* ConnectionState.swift in Sources */,
 				B95E39797258FB0B69F70575 /* ContentView.swift in Sources */,
 				A1E300044C6F4E8A9B2D7F04 /* HealthKitManager.swift in Sources */,
+				A1E300514C6F4E8A9B2D7F51 /* HealthTelemetryModels.swift in Sources */,
+				A1E300534C6F4E8A9B2D7F53 /* HealthTelemetryManager.swift in Sources */,
+				A1E300614C6F4E8A9B2D7F61 /* MediaQoLManager.swift in Sources */,
+				A1E300714C6F4E8A9B2D7F71 /* ReplyRelayManager.swift in Sources */,
+				A1E300814C6F4E8A9B2D7F81 /* FileTransferManager.swift in Sources */,
+				A1E300914C6F4E8A9B2D7F91 /* WatchFaceStoreManager.swift in Sources */,
+				A1E300944C6F4E8A9B2D7F94 /* WatchFaceBrowserView.swift in Sources */,
+				A1E300A14C6F4E8A9B2D7FA1 /* DashboardView.swift in Sources */,
+				A1E300A34C6F4E8A9B2D7FA3 /* WatchFaceHubView.swift in Sources */,
+				A1E300A54C6F4E8A9B2D7FA5 /* DeviceSyncView.swift in Sources */,
 				98910C98FC720871E4544C25 /* HowItWorksView.swift in Sources */,
 				25BCDC2B3260F8615BAF50A9 /* PairedDevice.swift in Sources */,
 				E0FE400394C388A4F3E3D11E /* PeripheralManager.swift in Sources */,
@@ -462,14 +559,14 @@
 				CODE_SIGN_ENTITLEMENTS = AncsBridge/AncsBridge.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 200;
 				DEVELOPMENT_TEAM = R68RHN3HF5;
 				INFOPLIST_FILE = "AncsBridge/Info-Generated.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.2;
+				MARKETING_VERSION = 2.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.wearos.ancsbridge.companion;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.9;
@@ -485,14 +582,14 @@
 				CODE_SIGN_ENTITLEMENTS = AncsBridge/AncsBridge.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Distribution";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 200;
 				DEVELOPMENT_TEAM = R68RHN3HF5;
 				INFOPLIST_FILE = "AncsBridge/Info-Generated.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.2;
+				MARKETING_VERSION = 2.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.wearos.ancsbridge.companion;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.9;
