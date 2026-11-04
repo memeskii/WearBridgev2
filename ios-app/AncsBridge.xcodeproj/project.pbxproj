@@ -102,6 +102,8 @@
 			children = (
 				DE9E7EB20D69D96663FD95A3 /* AncsBridge.entitlements */,
 				FC04AAF2152DC8E522F12619 /* AncsBridgeApp.swift */,
+				A1E300A84C6F4E8A9B2D7FA8 /* AppBrandRegistry.swift */,
+				A1E300B04C6F4E8A9B2D7FB0 /* WatchOtaManager.swift */,
 				77C36C2AFA8EA8C56AF8471D /* Assets.xcassets */,
 				523A43621478CD12C73CC964 /* Info-Generated.plist */,
 				E33384D451D23D1FDBB2AC6A /* BLE */,
