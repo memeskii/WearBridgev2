@@ -124,11 +124,13 @@ public class ReplyRelayManager: ObservableObject {
     private let keyRelayMode = "wearbridge_reply_relay_mode"
     private let keyWebhookUrl = "wearbridge_reply_webhook_url"
     private let keyShortcutName = "wearbridge_reply_shortcut_name"
+    private let keyBackgroundAction = "wearbridge_reply_background_action"
 
     @Published public var relayMode: ReplyRelayMode = .webhook
     @Published public var currentRelayMode: ReplyRelayMode = .webhook
     @Published public var webhookUrl: String = "http://localhost:8080/reply"
     @Published public var shortcutName: String = "WearBridgeReply"
+    @Published public var isBackgroundActionEnabled: Bool = true
     @Published public var lastRelayedReply: MessageReplyPayload? = nil
     @Published public var lastRelayStatus: String = "Idle"
 
@@ -147,6 +149,9 @@ public class ReplyRelayManager: ObservableObject {
         }
         if let name = UserDefaults.standard.string(forKey: keyShortcutName), !name.isEmpty {
             self.shortcutName = name
+        }
+        if UserDefaults.standard.object(forKey: keyBackgroundAction) != nil {
+            self.isBackgroundActionEnabled = UserDefaults.standard.bool(forKey: keyBackgroundAction)
         }
     }
 
