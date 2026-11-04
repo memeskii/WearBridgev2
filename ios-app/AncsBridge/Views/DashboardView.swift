@@ -142,7 +142,7 @@ public struct DashboardView: View {
 
     // MARK: - 1b. Active App Bridges Strip
     private var activeAppBridgesSection: some View {
-        let highlightBundles = [
+        let highlightBundles: [String] = [
             AppBrandRegistry.bundleTikTokGlobal,
             AppBrandRegistry.bundleWhatsApp,
             AppBrandRegistry.bundleIMessage,

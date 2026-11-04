@@ -10,6 +10,9 @@ public struct BrandInfo: Equatable {
     public let sfSymbolName: String
     public let category: String
 
+    public var sfSymbol: String { sfSymbolName }
+    public var primaryColor: Color { brandColor }
+
     public init(
         bundleId: String,
         displayName: String,
@@ -31,6 +34,26 @@ public struct BrandInfo: Equatable {
 /// Centralized registry mapping iOS bundle identifiers to brand names, brand colors,
 /// SF Symbols, and category metadata for both the iOS companion and watch bridge.
 public struct AppBrandRegistry {
+
+    // MARK: - Standard Bundle Identifier Constants
+    public static let bundleTikTokGlobal = "com.zhiliaoapp.musically"
+    public static let bundleTikTokAme = "com.ss.iphone.ugc.Ame"
+    public static let bundleTikTokBd = "com.bd.iphone.tiktok"
+    public static let bundleWhatsApp = "net.whatsapp.WhatsApp"
+    public static let bundleWhatsAppSmb = "net.whatsapp.WhatsAppSMB"
+    public static let bundleInstagram = "com.burbn.instagram"
+    public static let bundleThreads = "com.burbn.barcelona"
+    public static let bundleTelegram = "ph.telegra.Telegraph"
+    public static let bundleMessenger = "com.facebook.Messenger"
+    public static let bundleDiscord = "com.hammerandchisel.discord"
+    public static let bundleSnapchat = "com.toyopagroup.picaboo"
+    public static let bundleXTwitter = "com.atebits.Tweetie2"
+    public static let bundleSpotify = "com.spotify.client"
+    public static let bundleYouTube = "com.google.ios.youtube"
+    public static let bundleMusic = "com.apple.Music"
+    public static let bundleIMessage = "com.apple.MobileSMS"
+    public static let bundlePhone = "com.apple.mobilephone"
+    public static let bundleFaceTime = "com.apple.facetime"
 
     private static let registry: [String: BrandInfo] = [
         // TikTok (All Regional Variants)

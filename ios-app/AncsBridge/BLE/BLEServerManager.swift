@@ -337,6 +337,15 @@ public class BLEServerManager: NSObject, ObservableObject {
         }
     }
 
+    /// Generic packet transmitter for any Multiplexer Channel.
+    public func sendPacket(channel: ChannelID, payload: Data) {
+        let mtu = currentWriteMtu()
+        let chunks = multiplexer.createChunks(channel: channel, payload: payload, maxChunkSize: mtu)
+        for chunk in chunks {
+            enqueueOutboundChunk(chunk)
+        }
+    }
+
     /// "Test Notification": Triggers both a local iOS UNNotification (to test ANCS) and a custom GATT alert packet.
     public func sendTestNotification(title: String = "Test Notification", message: String = "Custom GATT Alert from iPhone") {
         // 1. Schedule local UNNotification

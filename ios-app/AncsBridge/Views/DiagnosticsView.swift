@@ -385,7 +385,9 @@ struct DiagnosticsView: View {
                                 (AppBrandRegistry.bundleTelegram, "Telegram"),
                                 (AppBrandRegistry.bundleInstagram, "Instagram"),
                                 (AppBrandRegistry.bundleDiscord, "Discord")
-                            ], id: \.0) { bundleId, name in
+                            ], id: \.0) { item in
+                                let bundleId = item.0
+                                let name = item.1
                                 let brand = AppBrandRegistry.resolve(bundleId)
                                 Button {
                                     selectedMockBundleId = bundleId
@@ -684,25 +686,27 @@ struct DiagnosticsView: View {
                     .cornerRadius(4)
             }
 
+            let sampleBundles: [String] = [
+                AppBrandRegistry.bundleTikTokGlobal,
+                AppBrandRegistry.bundleTikTokAme,
+                AppBrandRegistry.bundleWhatsApp,
+                AppBrandRegistry.bundleInstagram,
+                AppBrandRegistry.bundleThreads,
+                AppBrandRegistry.bundleTelegram,
+                AppBrandRegistry.bundleMessenger,
+                AppBrandRegistry.bundleDiscord,
+                AppBrandRegistry.bundleSnapchat,
+                AppBrandRegistry.bundleXTwitter,
+                AppBrandRegistry.bundleSpotify,
+                AppBrandRegistry.bundleYouTube,
+                AppBrandRegistry.bundleMusic,
+                AppBrandRegistry.bundleIMessage,
+                AppBrandRegistry.bundlePhone,
+                AppBrandRegistry.bundleFaceTime
+            ]
+
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                ForEach([
-                    AppBrandRegistry.bundleTikTokGlobal,
-                    AppBrandRegistry.bundleTikTokAme,
-                    AppBrandRegistry.bundleWhatsApp,
-                    AppBrandRegistry.bundleInstagram,
-                    AppBrandRegistry.bundleThreads,
-                    AppBrandRegistry.bundleTelegram,
-                    AppBrandRegistry.bundleMessenger,
-                    AppBrandRegistry.bundleDiscord,
-                    AppBrandRegistry.bundleSnapchat,
-                    AppBrandRegistry.bundleXTwitter,
-                    AppBrandRegistry.bundleSpotify,
-                    AppBrandRegistry.bundleYouTube,
-                    AppBrandRegistry.bundleMusic,
-                    AppBrandRegistry.bundleIMessage,
-                    AppBrandRegistry.bundlePhone,
-                    AppBrandRegistry.bundleFaceTime
-                ], id: \.self) { bundleId in
+                ForEach(sampleBundles, id: \.self) { bundleId in
                     let brand = AppBrandRegistry.resolve(bundleId)
                     HStack(spacing: 8) {
                         Circle()

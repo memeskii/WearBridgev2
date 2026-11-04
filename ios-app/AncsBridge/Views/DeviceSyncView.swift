@@ -319,15 +319,17 @@ public struct DeviceSyncView: View {
                     .foregroundColor(.secondary)
                     .bold()
 
+                let sampleBundles: [String] = [
+                    AppBrandRegistry.bundleIMessage,
+                    AppBrandRegistry.bundleWhatsApp,
+                    AppBrandRegistry.bundleTelegram,
+                    AppBrandRegistry.bundleMessenger,
+                    AppBrandRegistry.bundleInstagram,
+                    AppBrandRegistry.bundleTikTokGlobal
+                ]
+
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                    ForEach([
-                        AppBrandRegistry.bundleIMessage,
-                        AppBrandRegistry.bundleWhatsApp,
-                        AppBrandRegistry.bundleTelegram,
-                        AppBrandRegistry.bundleMessenger,
-                        AppBrandRegistry.bundleInstagram,
-                        AppBrandRegistry.bundleTikTokGlobal
-                    ], id: \.self) { bundleId in
+                    ForEach(sampleBundles, id: \.self) { bundleId in
                         let brand = AppBrandRegistry.resolve(bundleId)
                         HStack(spacing: 8) {
                             Circle()

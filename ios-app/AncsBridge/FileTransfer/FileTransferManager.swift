@@ -81,6 +81,16 @@ public final class FileTransferManager: ObservableObject {
         startTransfer(fileData: data, fileName: fileName, fileType: fileType, completion: completion)
     }
 
+    public func startFileTransfer(
+        fileData: Data,
+        fileName: String,
+        fileType: String = "WATCH_FACE",
+        onProgress: ((Double) -> Void)? = nil,
+        completion: ((Result<String, Error>) -> Void)? = nil
+    ) {
+        startTransfer(fileData: fileData, fileName: fileName, fileType: fileType, completion: completion)
+    }
+
     public func startTransfer(
         fileData: Data,
         fileName: String,
