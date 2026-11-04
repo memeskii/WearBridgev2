@@ -37,7 +37,7 @@ class HealthKitManager: ObservableObject {
     /**
      * Verify whether HealthKit is supported on this device.
      */
-    private fun checkAvailability() {
+    private func checkAvailability() {
         guard HKHealthStore.isHealthDataAvailable() else {
             isHealthKitAvailable = false
             logger.warning("HealthKit is not available on this device")
@@ -169,7 +169,7 @@ class HealthKitManager: ObservableObject {
         }
 
         // 4. Commit SpO2 Blood Oxygen to HealthKit
-        if bloodOxygen in 70...100 {
+        if bloodOxygen >= 70 && bloodOxygen <= 100 {
             saveBloodOxygen(percent: bloodOxygen)
         }
 
