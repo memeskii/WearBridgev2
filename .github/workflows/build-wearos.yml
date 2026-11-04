@@ -60,12 +60,13 @@ jobs:
           retention-days: 14
 
       - name: Publish APKs to Rolling GitHub Release
-        uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main'
-        with:
-          tag_name: latest
-          files: |
-            WearBridge-WearOS-v2.0.0-release.apk
-            WearBridge-WearOS-v2.0.0-debug.apk
+        continue-on-error: true
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view latest >/dev/null 2>&1; then
+            gh release upload latest WearBridge-WearOS-v2.0.0-release.apk WearBridge-WearOS-v2.0.0-debug.apk --clobber
+          else
+            gh release create latest WearBridge-WearOS-v2.0.0-release.apk WearBridge-WearOS-v2.0.0-debug.apk --title "WearBridge Latest Release" --notes "Automated build containing latest Wear OS APK and unsigned iOS IPA."
+          fi

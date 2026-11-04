@@ -55,12 +55,13 @@ jobs:
           retention-days: 14
 
       - name: Publish Rolling GitHub Release for SideStore
-        uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main'
-        with:
-          tag_name: latest
-          name: WearBridge Latest Release
-          body: Automated build containing latest unsigned IPA for SideStore OTA distribution.
-          files: AncsBridge-unsigned.ipa
+        continue-on-error: true
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view latest >/dev/null 2>&1; then
+            gh release upload latest AncsBridge-unsigned.ipa --clobber
+          else
+            gh release create latest AncsBridge-unsigned.ipa --title "WearBridge Latest Release" --notes "Automated build containing latest unsigned IPA for SideStore OTA distribution."
+          fi
