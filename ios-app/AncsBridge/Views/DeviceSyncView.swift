@@ -269,7 +269,7 @@ public struct DeviceSyncView: View {
             Picker("Relay Mode", selection: $relayManager.currentRelayMode) {
                 Text("Webhook").tag(RelayMode.webhook)
                 Text("Shortcuts").tag(RelayMode.shortcuts)
-                Text("Deep-Link").tag(RelayMode.deepLink)
+                Text("Deep-Link").tag(RelayMode.deeplink)
             }
             .pickerStyle(.segmented)
 
@@ -300,7 +300,7 @@ public struct DeviceSyncView: View {
                     }
                 }
 
-            case .deepLink:
+            case .deeplink:
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Direct Scheme Launching")
                         .font(.footnote)
