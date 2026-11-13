@@ -113,6 +113,7 @@ public class BLEPacketMultiplexer: ObservableObject {
     private let maxLogEntries = 200
 
     /// Reassembly state per channel
+    private var nextSequence: [ChannelID: UInt16] = [:]
     private var reassemblyBuffers: [ChannelID: Data] = [:]
 
     /// Callbacks for reassembled full payloads
@@ -181,9 +182,17 @@ public class BLEPacketMultiplexer: ObservableObject {
         // Handle Reassembly
         if flags.contains(.startOfTransfer) {
             reassemblyBuffers[channel] = Data()
+            nextSequence[channel] = 0
         }
 
         guard let bufferedBytes = reassemblyBuffers[channel]?.count else { return }
+        guard nextSequence[channel] == seq else {
+            reassemblyBuffers.removeValue(forKey: channel)
+            nextSequence.removeValue(forKey: channel)
+            sendCrcError(channel: channel, sequenceNumber: seq)
+            return
+        }
+        nextSequence[channel] = seq &+ 1
         let maxPayloadBytes = channel == .binaryFile ? FileTransferManager.windowSizeBytes + 1 : 4 * 1024 * 1024
         guard chunkPayload.count <= maxPayloadBytes + MemoryLayout<UInt32>.size - bufferedBytes else {
             reassemblyBuffers.removeValue(forKey: channel)
@@ -203,6 +212,7 @@ public class BLEPacketMultiplexer: ObservableObject {
                 return
             }
 
+            nextSequence.removeValue(forKey: channel)
             let payloadLength = fullBuffer.count - 4
             let payload = Data(fullBuffer.prefix(payloadLength))
             let suffixBytes = fullBuffer.suffix(4)
@@ -263,7 +273,7 @@ public class BLEPacketMultiplexer: ObservableObject {
 
             chunks.append(chunk)
             offset = sliceEnd
-            seq += 1
+            seq &+= 1
         }
 
         return chunks

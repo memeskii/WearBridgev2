@@ -2,7 +2,7 @@
   <img src="master-docs/AppleToWearOS/icon-light.png" width="130" alt="WearBridge Logo" />
 </p>
 
-# WearBridge v2.1.0
+# WearBridge v2.1.1
 
 <p align="center">
   <strong>The Ultimate Standalone iOS-to-WearOS Companion Ecosystem</strong><br>
@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/wearos-ancs/WearBridge/releases"><img src="https://img.shields.io/badge/Release-v2.1.0--Build210-blue.svg?style=flat-square" alt="Version" /></a>
+  <a href="https://github.com/wearos-ancs/WearBridge/releases"><img src="https://img.shields.io/badge/Release-v2.1.1--Build211-blue.svg?style=flat-square" alt="Version" /></a>
   <a href="https://developer.apple.com/ios/"><img src="https://img.shields.io/badge/iOS-16.0%2B-black.svg?style=flat-square&logo=apple" alt="iOS 16+" /></a>
   <a href="https://developer.android.com/wear"><img src="https://img.shields.io/badge/Wear%20OS-4.0%2B%20(API%2033%2B)-green.svg?style=flat-square&logo=android" alt="Wear OS 4+" /></a>
   <a href="https://swift.org"><img src="https://img.shields.io/badge/Swift-5.9-F05138.svg?style=flat-square&logo=swift" alt="Swift 5.9" /></a>
@@ -185,7 +185,7 @@ All multi-channel communication utilizes a 4-byte framing protocol with automati
    adb connect 192.168.1.50:5555
 
    # Install the WearBridge release APK
-   adb install -r WearBridge-WearOS-v2.1.0-debug.apk
+   adb install -r WearBridge-WearOS-v2.1.1-debug.apk
    ```
 4. **Grant Required Permissions**:
    ```bash

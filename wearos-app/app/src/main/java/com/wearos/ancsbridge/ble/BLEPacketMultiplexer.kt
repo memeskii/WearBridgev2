@@ -72,6 +72,7 @@ class BLEPacketMultiplexer {
     private val maxPayloadBytes = 4 * 1024 * 1024
 
     // Per-channel reassembly buffers
+    private val nextSequence = mutableMapOf<Byte, Short>()
     private val reassemblyBuffers = mutableMapOf<Byte, ByteArrayOutputStream>()
 
     // Callbacks
@@ -121,9 +122,17 @@ class BLEPacketMultiplexer {
         // Reassembly handling
         if (isStart) {
             reassemblyBuffers[channel] = ByteArrayOutputStream()
+            nextSequence[channel] = 0
         }
 
         val buffer = reassemblyBuffers[channel] ?: return
+        if (nextSequence[channel] != seq) {
+            reassemblyBuffers.remove(channel)
+            nextSequence.remove(channel)
+            sendCrcError(channel, seq)
+            return
+        }
+        nextSequence[channel] = (seq + 1).toShort()
         val maxFrameSize = if (channel == CHANNEL_BINARY_FILE) {
             com.wearos.ancsbridge.filetransfer.FileTransferConstants.WINDOW_SIZE_BYTES + 1 + Int.SIZE_BYTES
         } else {
@@ -137,6 +146,7 @@ class BLEPacketMultiplexer {
         buffer.write(payload)
 
         if (isEnd) {
+            nextSequence.remove(channel)
             val fullBytes = buffer.toByteArray()
             reassemblyBuffers.remove(channel)
 

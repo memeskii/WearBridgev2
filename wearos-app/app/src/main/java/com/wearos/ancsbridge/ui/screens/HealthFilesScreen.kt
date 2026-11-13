@@ -73,7 +73,7 @@ fun HealthFilesScreen() {
                 Card(
                     onClick = {
                         if (otaState.status == "READY_TO_INSTALL" && otaState.downloadedApkFile != null) {
-                            otaUpdater.installOtaApk(otaState.downloadedApkFile!!)
+                            otaState.downloadedApkFile?.let(otaUpdater::installOtaApk)
                         }
                     },
                     modifier = Modifier

@@ -38,8 +38,6 @@ public struct SyncedContactPayload: Codable, Equatable {
         try container.encode(familyName, forKey: .familyName)
         try container.encode(phoneNumbers, forKey: .phoneNumbers)
         // Also provide name & phones for simple parsers
-        try container.encode(fullName, forKey: .name)
-        try container.encode(phoneNumbers, forKey: .phones)
     }
 
     public init(from decoder: Decoder) throws {
@@ -71,6 +69,10 @@ public class ContactsSyncManager: ObservableObject {
     private let logger = Logger(subsystem: "com.wearos.ancsbridge", category: "ContactsSyncManager")
     private let store = CNContactStore()
     private let userDefaultsKey = "wearbridge_last_contacts_hash"
+
+    private var pendingHash: String?
+    private var timeout: DispatchWorkItem?
+    private var completions: [(Result<Int, Error>) -> Void] = []
 
     @Published public var isSyncing: Bool = false
     @Published public var syncedContactCount: Int = 0
@@ -122,7 +124,7 @@ public class ContactsSyncManager: ObservableObject {
     public func requestAuthorization(completion: @escaping (Bool) -> Void) {
         let status = CNContactStore.authorizationStatus(for: .contacts)
         switch status {
-        case .authorized:
+        case .authorized, .limited:
             completion(true)
         case .notDetermined:
             store.requestAccess(for: .contacts) { granted, error in
@@ -177,7 +179,7 @@ public class ContactsSyncManager: ObservableObject {
                     fullName: full,
                     givenName: given,
                     familyName: family,
-                    phoneNumbers: normalizedPhones
+                    phoneNumbers: normalizedPhones.sorted()
                 ))
             }
         }
@@ -203,67 +205,80 @@ public class ContactsSyncManager: ObservableObject {
         return (payload: jsonData, hash: hashString, count: contactList.count)
     }
 
-    /// Performs contacts sync. If `force` is false, only transmits if the hash changed.
     public func syncContacts(force: Bool = false, completion: ((Result<Int, Error>) -> Void)? = nil) {
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { self.syncContacts(force: force, completion: completion) }
+            return
+        }
+        if let completion { completions.append(completion) }
+        guard !isSyncing else { return }
+        guard BLEServerManager.shared.hasCompanionSubscriber else {
+            finish(.failure(syncError("Connect the watch before syncing contacts.")))
+            return
+        }
+        if !force && CNContactStore.authorizationStatus(for: .contacts) == .notDetermined {
+            finish(.failure(syncError("Allow contacts access to enable automatic sync.")))
+            return
+        }
+        isSyncing = true
         requestAuthorization { [weak self] authorized in
-            guard let self = self else { return }
-
+            guard let self else { return }
             guard authorized else {
-                let err = NSError(
-                    domain: "WearBridge.Contacts",
-                    code: 403,
-                    userInfo: [NSLocalizedDescriptionKey: "Contacts permission not granted by user"]
-                )
-                self.logger.warning("Contacts sync skipped: not authorized")
-                completion?(.failure(err))
+                self.finish(.failure(self.syncError("Contacts permission is required.")))
                 return
             }
-
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                guard let self = self else { return }
-                do {
-                    self.logger.info("Reading address book contacts...")
-                    let (payload, hash, count) = try self.fetchAndSerializeContacts()
-
-                    let storedHash = UserDefaults.standard.string(forKey: self.userDefaultsKey)
-
-                    if !force && storedHash == hash {
-                        self.logger.info("Contacts hash unchanged (\(hash.prefix(8))...), skipping transmission")
-                        DispatchQueue.main.async {
-                            self.syncedContactCount = count
-                            completion?(.success(0))
+            DispatchQueue.global(qos: .userInitiated).async {
+                let result = Result { try self.fetchAndSerializeContacts() }
+                DispatchQueue.main.async {
+                    guard self.isSyncing else { return }
+                    switch result {
+                    case .success(let snapshot):
+                        self.pendingHash = snapshot.hash
+                        guard BLEServerManager.shared.sendContactsPayload(snapshot.payload) else {
+                            self.finish(.failure(self.syncError("The watch disconnected or the address book is too large.")))
+                            return
                         }
-                        return
-                    }
-
-                    self.logger.info("Contacts changed or force sync requested. Sending \(count) contacts (\(payload.count) bytes) over Channel 0x02")
-
-                    DispatchQueue.main.async {
-                        self.isSyncing = true
-                    }
-
-                    // Dispatch via BLEServerManager
-                    BLEServerManager.shared.sendContactsPayload(payload)
-
-                    UserDefaults.standard.set(hash, forKey: self.userDefaultsKey)
-
-                    DispatchQueue.main.async {
-                        self.isSyncing = false
-                        self.syncedContactCount = count
-                        self.lastSyncDate = Date()
-                        self.lastSyncHash = hash
-                        completion?(.success(count))
-                    }
-
-                } catch {
-                    self.logger.error("Failed to fetch/serialize contacts: \(error.localizedDescription)")
-                    DispatchQueue.main.async {
-                        self.isSyncing = false
-                        completion?(.failure(error))
+                        let timer = DispatchWorkItem { [weak self] in
+                            guard let self else { return }
+                            self.finish(.failure(self.syncError("The watch did not confirm contact storage. Try again.")))
+                        }
+                        self.timeout = timer
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 90, execute: timer)
+                    case .failure(let error):
+                        self.finish(.failure(error))
                     }
                 }
             }
         }
     }
-}
 
+    func receiveSyncResult(_ payload: Data) {
+        guard let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+              json["type"] as? String == "contacts_result",
+              let hash = json["hash"] as? String, hash == pendingHash,
+              let count = json["count"] as? Int else { return }
+        guard count >= 0 else {
+            finish(.failure(syncError("The watch could not save the address book.")))
+            return
+        }
+        lastSyncHash = hash
+        lastSyncDate = Date()
+        syncedContactCount = count
+        UserDefaults.standard.set(hash, forKey: userDefaultsKey)
+        finish(.success(count))
+    }
+
+    private func finish(_ result: Result<Int, Error>) {
+        timeout?.cancel()
+        timeout = nil
+        pendingHash = nil
+        isSyncing = false
+        let callbacks = completions
+        completions.removeAll()
+        callbacks.forEach { $0(result) }
+    }
+
+    private func syncError(_ message: String) -> NSError {
+        NSError(domain: "WearBridge.Contacts", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+}

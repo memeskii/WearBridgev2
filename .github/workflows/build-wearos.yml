@@ -55,21 +55,21 @@ jobs:
           test -n "$WEARBRIDGE_RELEASE_KEY_ALIAS"
           test -n "$WEARBRIDGE_RELEASE_KEY_PASSWORD"
           (cd wearos-app && ./gradlew assembleRelease --no-daemon)
-          cp wearos-app/app/build/outputs/apk/release/app-release.apk WearBridge-WearOS-v2.1.0-release.apk
+          cp wearos-app/app/build/outputs/apk/release/app-release.apk WearBridge-WearOS-v2.1.1-release.apk
 
       - name: Upload Release APK Artifact
-        if: hashFiles('WearBridge-WearOS-v2.1.0-release.apk') != ''
+        if: hashFiles('WearBridge-WearOS-v2.1.1-release.apk') != ''
         uses: actions/upload-artifact@v4
         with:
-          name: WearBridge-WearOS-v2.1.0-release
-          path: WearBridge-WearOS-v2.1.0-release.apk
+          name: WearBridge-WearOS-v2.1.1-release
+          path: WearBridge-WearOS-v2.1.1-release.apk
           if-no-files-found: error
           retention-days: 14
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: WearBridge-WearOS-v2.1.0-debug
+          name: WearBridge-WearOS-v2.1.1-debug
           path: wearos-app/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
@@ -79,11 +79,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cp wearos-app/app/build/outputs/apk/debug/app-debug.apk WearBridge-WearOS-v2.1.0-debug.apk
+          cp wearos-app/app/build/outputs/apk/debug/app-debug.apk WearBridge-WearOS-v2.1.1-debug.apk
           if ! gh release view latest >/dev/null 2>&1; then
             gh release create latest --title "WearBridge Latest Release" --notes "WearBridge builds."
           fi
-          gh release upload latest WearBridge-WearOS-v2.1.0-debug.apk --clobber
-          if [ -f WearBridge-WearOS-v2.1.0-release.apk ]; then
-            gh release upload latest WearBridge-WearOS-v2.1.0-release.apk --clobber
+          gh release upload latest WearBridge-WearOS-v2.1.1-debug.apk --clobber
+          if [ -f WearBridge-WearOS-v2.1.1-release.apk ]; then
+            gh release upload latest WearBridge-WearOS-v2.1.1-release.apk --clobber
           fi

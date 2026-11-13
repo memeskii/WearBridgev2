@@ -380,9 +380,11 @@ public struct DeviceSyncView: View {
     // MARK: - Actions
     private func syncContactsNow() {
         contactsSyncMessage = "Reading address book..."
-        contactsManager.syncContacts(force: true)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            self.contactsSyncMessage = "Contacts synchronized over Channel 0x02!"
+        contactsManager.syncContacts(force: true) { result in
+            switch result {
+            case .success(let count): contactsSyncMessage = "Saved \(count) phone numbers on the watch."
+            case .failure(let error): contactsSyncMessage = error.localizedDescription
+            }
         }
     }
 

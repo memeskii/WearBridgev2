@@ -346,23 +346,23 @@ object AppIconResolver {
 
         // Specific keyword checks
         when {
-            lower.contains("whatsapp") -> return brandRegistry["net.whatsapp.WhatsApp"]!!
-            lower.contains("telegram") -> return brandRegistry["org.telegram.Telegram"]!!
-            lower.contains("discord") -> return brandRegistry["com.hammerandchisel.discord"]!!
-            lower.contains("instagram") -> return brandRegistry["com.burbn.instagram"]!!
-            lower.contains("messenger") -> return brandRegistry["com.facebook.Messenger"]!!
-            lower.contains("signal") -> return brandRegistry["org.whispersystems.signal"]!!
-            lower.contains("slack") -> return brandRegistry["com.slack.Slack"]!!
-            lower.contains("gmail") -> return brandRegistry["com.google.Gmail"]!!
-            lower.contains("outlook") -> return brandRegistry["com.microsoft.Office.Outlook"]!!
-            lower.contains("spotify") -> return brandRegistry["com.spotify.client"]!!
-            lower.contains("youtube") -> return brandRegistry["com.google.ios.youtube"]!!
-            lower.contains("uber") -> return brandRegistry["com.ubercab.UberClient"]!!
-            lower.contains("calendar") -> return brandRegistry["com.apple.mobilecal"]!!
-            lower.contains("notes") -> return brandRegistry["com.apple.mobilenotes"]!!
-            lower.contains("reddit") -> return brandRegistry["com.reddit.Reddit"]!!
-            lower.contains("linkedin") -> return brandRegistry["com.linkedin.LinkedIn"]!!
-            lower.contains("threads") -> return brandRegistry["com.burbn.barcelona"]!!
+            lower.contains("whatsapp") -> brandRegistry["net.whatsapp.WhatsApp"]?.let { return it }
+            lower.contains("telegram") -> brandRegistry["org.telegram.Telegram"]?.let { return it }
+            lower.contains("discord") -> brandRegistry["com.hammerandchisel.discord"]?.let { return it }
+            lower.contains("instagram") -> brandRegistry["com.burbn.instagram"]?.let { return it }
+            lower.contains("messenger") -> brandRegistry["com.facebook.Messenger"]?.let { return it }
+            lower.contains("signal") -> brandRegistry["org.whispersystems.signal"]?.let { return it }
+            lower.contains("slack") -> brandRegistry["com.slack.Slack"]?.let { return it }
+            lower.contains("gmail") -> brandRegistry["com.google.Gmail"]?.let { return it }
+            lower.contains("outlook") -> brandRegistry["com.microsoft.Office.Outlook"]?.let { return it }
+            lower.contains("spotify") -> brandRegistry["com.spotify.client"]?.let { return it }
+            lower.contains("youtube") -> brandRegistry["com.google.ios.youtube"]?.let { return it }
+            lower.contains("uber") -> brandRegistry["com.ubercab.UberClient"]?.let { return it }
+            lower.contains("calendar") -> brandRegistry["com.apple.mobilecal"]?.let { return it }
+            lower.contains("notes") -> brandRegistry["com.apple.mobilenotes"]?.let { return it }
+            lower.contains("reddit") -> brandRegistry["com.reddit.Reddit"]?.let { return it }
+            lower.contains("linkedin") -> brandRegistry["com.linkedin.LinkedIn"]?.let { return it }
+            lower.contains("threads") -> brandRegistry["com.burbn.barcelona"]?.let { return it }
         }
 
         // 3. Smart monogram fallback for unknown third-party iOS bundle IDs

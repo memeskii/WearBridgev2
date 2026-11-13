@@ -70,12 +70,12 @@ fun MessageInboxScreen() {
     val conversationSummaries by threads.collectAsStateWithLifecycle(initialValue = emptyList())
     var selectedThread by remember { mutableStateOf<ConversationSummary?>(null) }
 
-    if (selectedThread != null) {
+    val current = selectedThread
+    if (current != null) {
         ThreadDetailScreen(
-            thread = selectedThread!!,
+            thread = current,
             onBack = { selectedThread = null },
             onSendReply = { text ->
-                val current = selectedThread!!
                 replyManager.sendReply(
                     threadKey = current.threadKey,
                     appBundleId = current.appBundleId,

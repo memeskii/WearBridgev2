@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [2.1.1] - 2026-11-13
+
+- Serialize BLE service discovery and MTU requests with other GATT operations.
+- Confirm contact sync only after the watch saves the address book.
+- Harden watch service startup, reconnect, and screen state handling.
+
 ## [2.1.0] - 2026-11-13
 
 - Added separate notification and companion connection status, a BLE heartbeat, and GATT timeout recovery.

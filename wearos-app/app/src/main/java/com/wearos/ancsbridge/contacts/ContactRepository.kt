@@ -5,11 +5,12 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
-import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Repository managing synced contacts in Room database with an in-memory cache
@@ -25,6 +26,7 @@ class ContactRepository private constructor(private val context: Context) {
 
         fun getInstance(context: Context): ContactRepository {
             return INSTANCE ?: synchronized(this) {
+                INSTANCE?.let { return it }
                 val instance = ContactRepository(context.applicationContext)
                 INSTANCE = instance
                 instance
@@ -87,38 +89,19 @@ class ContactRepository private constructor(private val context: Context) {
     private val dao = db.syncedContactDao()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    // Memory cache for instantaneous lookup: normalizedPhone -> Full Name
-    private val memoryCache = ConcurrentHashMap<String, String>()
+    private val writeLock = Mutex()
 
-    // Suffix index: last 7 digits -> Full Name
-    private val suffixCache = ConcurrentHashMap<String, String>()
+    @Volatile
+    private var contactNames: Map<String, String> = emptyMap()
 
     init {
-        // Pre-warm the cache from Room on startup
         scope.launch {
-            warmUpCache()
-        }
-    }
-
-    private suspend fun warmUpCache() {
-        try {
-            val contacts = dao.getAllContactsSnapshot()
-            for (contact in contacts) {
-                cacheContact(contact.phoneNumber, contact.fullName)
-            }
-            Log.i(TAG, "Cache warmed up with ${contacts.size} contacts from Room")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error warming up contacts cache: ${e.message}")
-        }
-    }
-
-    private fun cacheContact(phone: String, name: String) {
-        val normalized = normalizePhoneNumber(phone)
-        if (normalized.isNotEmpty()) {
-            memoryCache[normalized] = name
-            val suffix = extractSignificantSuffix(normalized)
-            if (suffix.length >= 7) {
-                suffixCache[suffix] = name
+            writeLock.withLock {
+                try {
+                    contactNames = dao.getAllContactsSnapshot().associate { it.phoneNumber to it.fullName }
+                } catch (e: android.database.sqlite.SQLiteException) {
+                    Log.e(TAG, "Could not load contacts from Room", e)
+                }
             }
         }
     }
@@ -136,21 +119,14 @@ class ContactRepository private constructor(private val context: Context) {
         val normalized = normalizePhoneNumber(phoneNumber)
         if (normalized.isEmpty()) return null
 
-        // 1. Direct match
-        memoryCache[normalized]?.let { return it }
-
-        // 2. Suffix match (e.g. comparing "+15551234567" with "5551234567")
+        val names = contactNames
+        names[normalized]?.let { return it }
         val suffix = extractSignificantSuffix(normalized)
         if (suffix.length >= 7) {
-            suffixCache[suffix]?.let { return it }
-
-            // Iterative suffix check in memory cache
-            for ((cachedPhone, cachedName) in memoryCache) {
-                val cachedSuffix = extractSignificantSuffix(cachedPhone)
-                if (cachedSuffix == suffix) {
-                    return cachedName
-                }
-            }
+            val matches = names.asSequence()
+                .filter { extractSignificantSuffix(it.key) == suffix }
+                .map { it.value }.distinct().take(2).toList()
+            return matches.singleOrNull()
         }
 
         return null
@@ -207,29 +183,22 @@ class ContactRepository private constructor(private val context: Context) {
                                     updatedAt = now
                                 )
                             )
-                            cacheContact(normalized, fullName)
                         }
                     }
                 }
 
-                if (contactEntities.isNotEmpty()) {
-                    dao.replaceAllContacts(contactEntities)
-                    memoryCache.clear()
-                    suffixCache.clear()
-                    for (entity in contactEntities) {
-                        cacheContact(entity.phoneNumber, entity.fullName)
-                    }
-                    Log.i(TAG, "Successfully replaced all contacts with ${contactEntities.size} phone entries in Room and refreshed memory cache")
-                } else {
-                    dao.clearAll()
-                    memoryCache.clear()
-                    suffixCache.clear()
+                val entries = contactEntities.distinctBy { it.phoneNumber }
+                require(jsonArray.length() == 0 || entries.isNotEmpty()) { "No valid contact numbers in snapshot" }
+                writeLock.withLock {
+                    dao.replaceAllContacts(entries)
+                    contactNames = entries.associate { it.phoneNumber to it.fullName }
                 }
 
-                onComplete?.invoke(contactEntities.size)
+                onComplete?.invoke(entries.size)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to parse/upsert contacts JSON: ${e.message}", e)
-                onComplete?.invoke(0)
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                onComplete?.invoke(-1)
             }
         }
     }

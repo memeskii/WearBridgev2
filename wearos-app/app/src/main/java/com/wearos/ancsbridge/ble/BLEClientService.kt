@@ -222,7 +222,7 @@ class BLEClientService(private val context: Context) {
                 return@GattCallback
             }
 
-            subscribeToCharacteristic(dataSourceChar!!)
+            dataSourceChar?.let(::subscribeToCharacteristic)
         },
         onNotificationSourceChanged = { data ->
             _notificationSourceEvents.tryEmit(data)

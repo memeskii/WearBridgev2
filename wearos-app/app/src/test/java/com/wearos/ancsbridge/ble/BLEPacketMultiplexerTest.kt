@@ -11,6 +11,23 @@ import java.nio.ByteOrder
 class BLEPacketMultiplexerTest {
 
     @Test
+    fun missingContactChunkRejectsSnapshotAndAllowsRetry() {
+        val multiplexer = BLEPacketMultiplexer()
+        val channel = BLEPacketMultiplexer.CHANNEL_CONTACTS_JSON
+        val payload = ByteArray(80) { it.toByte() }
+        val chunks = multiplexer.createChunks(channel, payload, 20)
+        var deliveries = 0
+        multiplexer.onPayloadReceived = { _, received ->
+            assertTrue(payload.contentEquals(received))
+            deliveries++
+        }
+        chunks.filterIndexed { index, _ -> index != 1 }.forEach(multiplexer::processIncomingChunk)
+        assertEquals(0, deliveries)
+        chunks.forEach(multiplexer::processIncomingChunk)
+        assertEquals(1, deliveries)
+    }
+
+    @Test
     fun oversizedFileFrameIsRejectedAndNextValidFrameIsDelivered() {
         val multiplexer = BLEPacketMultiplexer()
         val channel = BLEPacketMultiplexer.CHANNEL_BINARY_FILE

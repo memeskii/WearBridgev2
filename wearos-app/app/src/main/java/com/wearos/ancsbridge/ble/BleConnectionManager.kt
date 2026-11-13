@@ -45,7 +45,6 @@ class BleConnectionManager(private val context: Context) {
         private const val MAX_RECONNECT_DELAY_MS = 30_000L
         private const val INITIAL_RECONNECT_DELAY_MS = 3_000L
         private const val TARGET_MTU = 512
-        private const val MAX_SERVICE_DISCOVERY_RETRIES = 2
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -86,6 +85,8 @@ class BleConnectionManager(private val context: Context) {
 
     // MARK: - Strict Sequential Android GATT Operation Queue
     sealed class GattOperation {
+        data object RequestMtu : GattOperation()
+        data object DiscoverServices : GattOperation()
         data class WriteDescriptor(
             val descriptor: BluetoothGattDescriptor,
             val value: ByteArray
@@ -121,11 +122,9 @@ class BleConnectionManager(private val context: Context) {
     private var companionRetryJob: Job? = null
     private var lastServiceDiscoveryTime = 0L
 
-    var onDescriptorQueueDrained: (() -> Unit)? = null
     val isQueueBusy: Boolean
         get() = isGattOperationInFlight || !gattOperationQueue.isEmpty() || !pendingCompanionPayloads.isEmpty()
 
-    private var serviceDiscoveryRetries = 0
     private var notificationSourceChar: BluetoothGattCharacteristic? = null
     private var controlPointChar: BluetoothGattCharacteristic? = null
     private var dataSourceChar: BluetoothGattCharacteristic? = null
@@ -176,7 +175,7 @@ class BleConnectionManager(private val context: Context) {
             Log.i(TAG, "Bond completed, re-discovering services")
             scope.launch {
                 delay(1000)
-                gatt?.discoverServices()
+                enqueueGattOperation(GattOperation.DiscoverServices)
             }
         },
         onBondFailed = { device ->
@@ -194,7 +193,7 @@ class BleConnectionManager(private val context: Context) {
             _connectionState.value = ConnectionState.Connecting(displayName)
 
             // Request higher MTU for less fragmentation
-            if (!gatt.requestMtu(TARGET_MTU)) gatt.discoverServices()
+            enqueueGattOperation(GattOperation.RequestMtu)
         },
         onDisconnected = onDisconnected@{ gatt, status ->
             if (gatt !== this.gatt) {
@@ -207,9 +206,10 @@ class BleConnectionManager(private val context: Context) {
             }
         },
         onServicesDiscoveredCallback = { gatt, status ->
+            finishGattOperation()
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 Log.e(TAG, "Service discovery failed: $status")
-                _connectionState.value = ConnectionState.Error("Service discovery failed")
+                synchronized(gattLock) { if (gatt === this.gatt) retireGatt(gatt) }
                 return@GattCallback
             }
 
@@ -222,31 +222,15 @@ class BleConnectionManager(private val context: Context) {
                     _connectionState.value = ConnectionState.Bonding(bondDisplayName)
                     gatt.device.createBond()
                 } else {
-                    // Bonded but ANCS still not visible — retry once, then give up
-                    serviceDiscoveryRetries++
-                    if (serviceDiscoveryRetries <= MAX_SERVICE_DISCOVERY_RETRIES) {
-                        Log.w(TAG, "Bonded but ANCS not found, retry $serviceDiscoveryRetries/$MAX_SERVICE_DISCOVERY_RETRIES")
-                        scope.launch {
-                            gatt.disconnect()
-                            delay(2000)
-                            connect(gatt.device, autoReconnect = false)
-                        }
-                    } else {
-                        Log.e(TAG, "ANCS not found after $MAX_SERVICE_DISCOVERY_RETRIES retries — not an iPhone?")
-                        _connectionState.value = ConnectionState.Error("Not an iPhone (no ANCS)")
-                        scope.launch {
-                            gatt.disconnect()
-                            gatt.close()
-                            this@BleConnectionManager.gatt = null
-                        }
-                    }
+                    Log.w(TAG, "Bonded phone has no ANCS service. Reconnecting with backoff.")
+                    synchronized(gattLock) { if (gatt === this.gatt) retireGatt(gatt) }
                 }
+                processNextGattOperation()
                 return@GattCallback
             }
 
             // ANCS service found — get characteristics
             Log.i(TAG, "ANCS service found!")
-            serviceDiscoveryRetries = 0
 
             // Also discover Apple Media Service (AMS)
             val amsService = gatt.getService(AncsConstants.AMS_SERVICE_UUID)
@@ -273,6 +257,7 @@ class BleConnectionManager(private val context: Context) {
                         enqueueGattOperation(GattOperation.WriteCharacteristic(companionChar, buffered, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT))
                     }
                 }
+                processNextGattOperation()
                 return@GattCallback
             }
 
@@ -302,6 +287,10 @@ class BleConnectionManager(private val context: Context) {
             }
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 Log.e(TAG, "Descriptor write failed: $status for ${descriptor.characteristic.uuid}")
+                if (descriptor.characteristic.uuid == AncsConstants.DATA_SOURCE_UUID ||
+                    descriptor.characteristic.uuid == AncsConstants.NOTIFICATION_SOURCE_UUID) {
+                    synchronized(gattLock) { gatt?.let(::retireGatt) }
+                }
             } else {
                 val charUuid = descriptor.characteristic.uuid
                 when (charUuid) {
@@ -365,10 +354,11 @@ class BleConnectionManager(private val context: Context) {
             processNextGattOperation()
         },
         onMtuChanged = { mtu, status ->
+            finishGattOperation()
             Log.i(TAG, "MTU negotiated: $mtu (status=$status)")
             negotiatedMtu = if (status == BluetoothGatt.GATT_SUCCESS) mtu else 23
             // After MTU negotiation, discover services
-            gatt?.discoverServices()
+            enqueueGattOperation(GattOperation.DiscoverServices)
         },
         onCharacteristicReadFailure = {
             gattWatchdogJob?.cancel()
@@ -446,7 +436,17 @@ class BleConnectionManager(private val context: Context) {
             }
             BLEPacketMultiplexer.CHANNEL_CONTACTS_JSON -> {
                 Log.i(TAG, "Multiplexer Contacts payload received: ${payload.size} bytes")
-                com.wearos.ancsbridge.contacts.ContactRepository.getInstance(context).upsertContacts(payload)
+                val session = gatt ?: return
+                com.wearos.ancsbridge.contacts.ContactRepository.getInstance(context).upsertContacts(payload) { count ->
+                    val hash = com.wearos.ancsbridge.filetransfer.FileTransferManager.bytesToHex(
+                            java.security.MessageDigest.getInstance("SHA-256").digest(payload)
+                        )
+                    scope.launch {
+                        if (gatt !== session) return@launch
+                        val ack = JSONObject().put("type", "contacts_result").put("hash", hash).put("count", count)
+                        sendChannelPayload(BLEPacketMultiplexer.CHANNEL_CONTACTS_JSON, ack.toString().toByteArray(Charsets.UTF_8))
+                    }
+                }
             }
             BLEPacketMultiplexer.CHANNEL_WEATHER_JSON -> {
                 Log.i(TAG, "Multiplexer Weather payload received: ${payload.size} bytes")
@@ -531,7 +531,6 @@ class BleConnectionManager(private val context: Context) {
         reconnectJob?.cancel()
         this.autoReconnect = autoReconnect
         this.targetDevice = device
-        this.serviceDiscoveryRetries = 0
 
         _connectionState.value = ConnectionState.Connecting(if (isTruncatedBleName(device.name ?: "")) "iPhone" else (device.name ?: "iPhone"))
 
@@ -560,7 +559,6 @@ class BleConnectionManager(private val context: Context) {
         reconnectJob?.cancel()
         this.targetDevice = device
         this.autoReconnect = true
-        this.serviceDiscoveryRetries = 0
 
         _connectionState.value = ConnectionState.Connecting(if (isTruncatedBleName(device.name ?: "")) "iPhone" else (device.name ?: "iPhone"))
 
@@ -645,7 +643,7 @@ class BleConnectionManager(private val context: Context) {
         if (now - lastServiceDiscoveryTime < 4000L) return
         lastServiceDiscoveryTime = now
         Log.i(TAG, "Requesting service discovery to locate iOS companion service")
-        gatt?.discoverServices()
+        enqueueGattOperation(GattOperation.DiscoverServices)
     }
 
     private fun scheduleCompanionServiceCheck(delayMs: Long = 4000L) {
@@ -740,6 +738,13 @@ class BleConnectionManager(private val context: Context) {
         processNextGattOperation()
     }
 
+    private fun finishGattOperation() {
+        synchronized(gattLock) {
+            gattWatchdogJob?.cancel()
+            isGattOperationInFlight = false
+        }
+    }
+
     private fun processNextGattOperation() {
         synchronized(gattLock) {
             val currentGatt = this.gatt ?: run {
@@ -754,63 +759,67 @@ class BleConnectionManager(private val context: Context) {
                 return
             }
 
-            val nextOp = gattOperationQueue.poll() ?: run {
-                onDescriptorQueueDrained?.invoke()
-                return
-            }
+            while (true) {
+                val nextOp = gattOperationQueue.poll() ?: return
 
-            isGattOperationInFlight = true
+                isGattOperationInFlight = true
 
-            gattWatchdogJob?.cancel()
-            gattWatchdogJob = scope.launch {
-                delay(3000)
-                synchronized(gattLock) {
-                    if (this@BleConnectionManager.gatt !== currentGatt || !isGattOperationInFlight) return@launch
-                    Log.w(TAG, "GATT operation timed out. Retiring the connection.")
-                    retireGatt(currentGatt)
-                }
-            }
-
-            val success = try {
-                when (nextOp) {
-                    is GattOperation.WriteDescriptor -> {
-                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                            val status = currentGatt.writeDescriptor(nextOp.descriptor, nextOp.value)
-                            status == android.bluetooth.BluetoothStatusCodes.SUCCESS
-                        } else {
-                            @Suppress("DEPRECATION")
-                            nextOp.descriptor.value = nextOp.value
-                            @Suppress("DEPRECATION")
-                            currentGatt.writeDescriptor(nextOp.descriptor)
-                        }
-                    }
-                    is GattOperation.WriteCharacteristic -> {
-                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                            val status = currentGatt.writeCharacteristic(nextOp.characteristic, nextOp.value, nextOp.writeType)
-                            status == android.bluetooth.BluetoothStatusCodes.SUCCESS
-                        } else {
-                            @Suppress("DEPRECATION")
-                            nextOp.characteristic.value = nextOp.value
-                            @Suppress("DEPRECATION")
-                            nextOp.characteristic.writeType = nextOp.writeType
-                            @Suppress("DEPRECATION")
-                            currentGatt.writeCharacteristic(nextOp.characteristic)
-                        }
-                    }
-                    is GattOperation.ReadCharacteristic -> {
-                        currentGatt.readCharacteristic(nextOp.characteristic)
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Exception executing GattOperation $nextOp: ${e.message}", e)
-                false
-            }
-
-            if (!success) {
-                Log.w(TAG, "GattOperation execution returned false for $nextOp, releasing lock")
                 gattWatchdogJob?.cancel()
-                isGattOperationInFlight = false
-                processNextGattOperation()
+                gattWatchdogJob = scope.launch {
+                    delay(3000)
+                    synchronized(gattLock) {
+                        if (this@BleConnectionManager.gatt !== currentGatt || !isGattOperationInFlight) return@launch
+                        Log.w(TAG, "GATT operation timed out. Retiring the connection.")
+                        retireGatt(currentGatt)
+                    }
+                }
+
+                val success = try {
+                    when (nextOp) {
+                        GattOperation.RequestMtu -> currentGatt.requestMtu(TARGET_MTU)
+                        GattOperation.DiscoverServices -> currentGatt.discoverServices()
+                        is GattOperation.WriteDescriptor -> {
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                                val status = currentGatt.writeDescriptor(nextOp.descriptor, nextOp.value)
+                                status == android.bluetooth.BluetoothStatusCodes.SUCCESS
+                            } else {
+                                @Suppress("DEPRECATION")
+                                nextOp.descriptor.value = nextOp.value
+                                @Suppress("DEPRECATION")
+                                currentGatt.writeDescriptor(nextOp.descriptor)
+                            }
+                        }
+                        is GattOperation.WriteCharacteristic -> {
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                                val status = currentGatt.writeCharacteristic(nextOp.characteristic, nextOp.value, nextOp.writeType)
+                                status == android.bluetooth.BluetoothStatusCodes.SUCCESS
+                            } else {
+                                @Suppress("DEPRECATION")
+                                nextOp.characteristic.value = nextOp.value
+                                @Suppress("DEPRECATION")
+                                nextOp.characteristic.writeType = nextOp.writeType
+                                @Suppress("DEPRECATION")
+                                currentGatt.writeCharacteristic(nextOp.characteristic)
+                            }
+                        }
+                        is GattOperation.ReadCharacteristic -> {
+                            currentGatt.readCharacteristic(nextOp.characteristic)
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Exception executing GattOperation $nextOp: ${e.message}", e)
+                    false
+                }
+
+                if (success) return
+                Log.w(TAG, "GATT rejected ${nextOp.javaClass.simpleName}")
+                finishGattOperation()
+                if (nextOp == GattOperation.RequestMtu) {
+                    gattOperationQueue.add(GattOperation.DiscoverServices)
+                } else if (nextOp == GattOperation.DiscoverServices || nextOp is GattOperation.WriteDescriptor) {
+                    retireGatt(currentGatt)
+                    return
+                }
             }
         }
     }
@@ -936,8 +945,7 @@ class BleConnectionManager(private val context: Context) {
         val previousGatt = gatt
         gatt = null
         clearCharacteristics()
-        previousGatt?.disconnect()
-        previousGatt?.close()
+        if (previousGatt != null) closeGatt(previousGatt)
         targetDevice = null
         _connectionState.value = ConnectionState.Idle
     }
@@ -977,7 +985,7 @@ class BleConnectionManager(private val context: Context) {
         heartbeatJob = scope.launch {
             while (gatt === session) {
                 val now = android.os.SystemClock.elapsedRealtime()
-                if (heartbeatConfirmed && now - lastHeartbeatReply > 100_000L) {
+                if (!isQueueBusy && heartbeatConfirmed && now - lastHeartbeatReply > 100_000L) {
                     _companionConnected.value = false
                     synchronized(gattLock) {
                         if (gatt === session) retireGatt(session)
@@ -1005,16 +1013,31 @@ class BleConnectionManager(private val context: Context) {
     private fun retireGatt(previousGatt: BluetoothGatt) {
         gatt = null
         clearCharacteristics()
-        previousGatt.close()
+        closeGatt(previousGatt)
         _connectionState.value = ConnectionState.Disconnected()
         if (autoReconnect && targetDevice != null) scheduleReconnect()
+    }
+
+    private fun closeGatt(session: BluetoothGatt) {
+        try {
+            session.disconnect()
+        } catch (error: SecurityException) {
+            Log.w(TAG, "Bluetooth permission was revoked before disconnect", error)
+        } finally {
+            try {
+                session.close()
+            } catch (error: SecurityException) {
+                Log.w(TAG, "Bluetooth permission was revoked before closing GATT", error)
+            }
+        }
     }
 
     private fun scheduleReconnect() {
         reconnectJob?.cancel()
         reconnectJob = scope.launch {
             Log.i(TAG, "Scheduling reconnect in ${reconnectDelay}ms")
-            delay(reconnectDelay)
+            val jitter = kotlin.random.Random.nextLong(reconnectDelay / 4 + 1)
+            delay((reconnectDelay + jitter).coerceAtMost(MAX_RECONNECT_DELAY_MS))
             reconnectDelay = (reconnectDelay * 2).coerceAtMost(MAX_RECONNECT_DELAY_MS)
             targetDevice?.let { reconnect(it) }
         }

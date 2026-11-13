@@ -15,7 +15,6 @@ import com.wearos.ancsbridge.AncsApplication
 import com.wearos.ancsbridge.R
 import com.wearos.ancsbridge.ble.AncsConstants
 import com.wearos.ancsbridge.ble.BleConnectionManager
-import com.wearos.ancsbridge.ble.BleScanner
 import com.wearos.ancsbridge.ble.BondStateReceiver
 import com.wearos.ancsbridge.model.AncsEvent
 import com.wearos.ancsbridge.model.AncsNotification
@@ -88,9 +87,13 @@ class AncsService : Service() {
             private set
     }
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Main + kotlinx.coroutines.CoroutineExceptionHandler { _, error ->
+            Log.e(TAG, "WearBridge service task failed", error)
+        }
+    )
+    private var bondReceiverRegistered = false
     private lateinit var connectionManager: BleConnectionManager
-    private lateinit var scanner: BleScanner
     private lateinit var notificationManager: NotificationManager
     private lateinit var vibrator: Vibrator
 
@@ -121,20 +124,27 @@ class AncsService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        instance = this
+        if (!hasBluetoothPermission()) {
+            stopSelf()
+            return
+        }
         connectionManager = BleConnectionManager(this)
-        scanner = BleScanner(this)
         notificationManager = getSystemService(NotificationManager::class.java)
         vibrator = getSystemService(Vibrator::class.java)
 
-        // Register bond state receiver
-        registerReceiver(connectionManager.bondStateReceiver, BondStateReceiver.intentFilter)
-
-        // Register PhoneAccount for Telecom framework integration
-        // This lets us show incoming calls via the system call UI
+        androidx.core.app.ServiceCompat.startForeground(
+            this,
+            SERVICE_NOTIFICATION_ID,
+            buildServiceNotification("Starting…"),
+            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+        )
+        instance = this
+        androidx.core.content.ContextCompat.registerReceiver(
+            this, connectionManager.bondStateReceiver, BondStateReceiver.intentFilter,
+            androidx.core.content.ContextCompat.RECEIVER_EXPORTED
+        )
+        bondReceiverRegistered = true
         AncsConnectionService.registerPhoneAccount(this)
-
-        startForeground(SERVICE_NOTIFICATION_ID, buildServiceNotification("Starting..."))
 
         // Start Bluetooth SIG Battery Service (BAS 0x180F) GATT server & live telemetry
         batteryGattServer = com.wearos.ancsbridge.ble.BatteryGattServer(this) { batteryPct, isCharging ->
@@ -149,12 +159,6 @@ class AncsService : Service() {
             connectionManager.sendHealthTelemetry(payload)
         }
         healthDataManager?.start()
-
-        // Timing safeguard: Trigger companion battery & health telemetry once the ANCS CCCD queue is fully drained
-        connectionManager.onDescriptorQueueDrained = {
-            batteryGattServer?.pushCurrentState()
-            healthDataManager?.forcePushHealthUpdate()
-        }
 
         // Listen for Notification Source events
         scope.launch {
@@ -178,7 +182,13 @@ class AncsService : Service() {
         }
 
         scope.launch {
-            connectionManager.companionConnected.collect { _companionConnected.value = it }
+            connectionManager.companionConnected.collect { connected ->
+                _companionConnected.value = connected
+                if (connected) {
+                    batteryGattServer?.pushCurrentState()
+                    healthDataManager?.forcePushHealthUpdate()
+                }
+            }
         }
 
         // Update service notification and shared state based on connection state
@@ -208,7 +218,15 @@ class AncsService : Service() {
         startRequestProcessor()
     }
 
+    private fun hasBluetoothPermission(): Boolean =
+        checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (!::connectionManager.isInitialized || !hasBluetoothPermission()) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         when (intent?.action) {
             ACTION_START, null -> {
                 // Try to reconnect to bonded iPhone
@@ -216,12 +234,9 @@ class AncsService : Service() {
             }
             ACTION_CONNECT -> {
                 val address = intent.getStringExtra(EXTRA_DEVICE_ADDRESS)
-                if (address != null) {
-                    val device = scanner.let {
-                        val manager = getSystemService(BLUETOOTH_SERVICE) as android.bluetooth.BluetoothManager
-                        manager.adapter.getRemoteDevice(address)
-                    }
-                    connectionManager.connect(device)
+                if (address != null && android.bluetooth.BluetoothAdapter.checkBluetoothAddress(address)) {
+                    val manager = getSystemService(android.bluetooth.BluetoothManager::class.java)
+                    manager?.adapter?.getRemoteDevice(address)?.let { connectionManager.connect(it) }
                 }
             }
             ACTION_DISCONNECT -> {
@@ -290,10 +305,8 @@ class AncsService : Service() {
         com.wearos.ancsbridge.health.HealthTelemetryManager.getInstance(this).stopPeriodicSync()
         batteryGattServer?.stop()
         batteryGattServer = null
-        try {
-            unregisterReceiver(connectionManager.bondStateReceiver)
-        } catch (_: IllegalArgumentException) { }
-        connectionManager.destroy()
+        if (bondReceiverRegistered) unregisterReceiver(connectionManager.bondStateReceiver)
+        if (::connectionManager.isInitialized) connectionManager.destroy()
         attributeRequestQueue.close()
         scope.cancel()
     }

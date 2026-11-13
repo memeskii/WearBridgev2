@@ -90,9 +90,10 @@ fun MediaPlayerScreen() {
         contentAlignment = Alignment.Center
     ) {
         // Full-bleed blurred album artwork background
-        if (mediaState.artwork != null) {
+        val artwork = mediaState.artwork
+        if (artwork != null) {
             Image(
-                bitmap = mediaState.artwork!!.asImageBitmap(),
+                bitmap = artwork.asImageBitmap(),
                 contentDescription = "Blurred Album Art",
                 contentScale = ContentScale.Crop,
                 modifier = Modifier

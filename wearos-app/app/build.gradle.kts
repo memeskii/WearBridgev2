@@ -20,8 +20,8 @@ android {
         applicationId = "com.wearos.ancsbridge"
         minSdk = 33 // Wear OS 4
         targetSdk = 35
-        versionCode = 210
-        versionName = "2.1.0"
+        versionCode = 211
+        versionName = "2.1.1"
     }
 
     signingConfigs {

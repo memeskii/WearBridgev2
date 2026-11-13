@@ -219,6 +219,9 @@ public class BLEServerManager: NSObject, ObservableObject {
                 }
             }
 
+        case .contactsJson:
+            ContactsSyncManager.shared.receiveSyncResult(payload)
+
         case .messageReply:
             if let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] {
                 if json["replyId"] != nil {
@@ -540,7 +543,9 @@ public class BLEServerManager: NSObject, ObservableObject {
 
     // MARK: - Contacts and Weather Sync Dispatch
     /// Sends a serialized contacts array over BLE Channel 0x02
-    public func sendContactsPayload(_ payload: Data) {
+    @discardableResult
+    public func sendContactsPayload(_ payload: Data) -> Bool {
+        guard hasCompanionSubscriber, payload.count <= 4 * 1024 * 1024 else { return false }
         let mtu = currentWriteMtu()
         let chunks = multiplexer.createChunks(channel: .contactsJson, payload: payload, maxChunkSize: mtu)
         logger.info("Transmitting contacts payload (\(payload.count) bytes) in \(chunks.count) chunks over Channel 0x02")
@@ -557,6 +562,7 @@ public class BLEServerManager: NSObject, ObservableObject {
             )
             enqueueOutboundChunk(chunk)
         }
+        return true
     }
 
     /// Sends a compact weather forecast over BLE Channel 0x03
