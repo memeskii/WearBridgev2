@@ -7,22 +7,22 @@
       "bundleIdentifier": "com.wearos.ancsbridge.companion",
       "developerName": "WearBridge",
       "subtitle": "Wear OS to iOS Notification & Battery Bridge",
-      "version": "2.1.0",
+      "version": "2.1.1",
       "versionDate": "2026-11-13T12:00:00Z",
-      "versionDescription": "Improved BLE reconnect, playback feedback, cached status, and file transfer recovery.",
+      "versionDescription": "Improved BLE stability and confirmed contact sync after the watch saves your address book.",
       "downloadURL": "https://github.com/memeskii/WearBridgev2/releases/download/latest/AncsBridge-unsigned.ipa",
       "localizedDescription": "Bridge your Samsung Galaxy Watch / Wear OS watch to your iPhone. Enables ANCS notification mirroring, quick replies, native iOS battery widget integration, and health telemetry.",
       "iconURL": "https://raw.githubusercontent.com/memeskii/WearBridgev2/main/ios-app/AncsBridge/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
       "tintColor": "2563EB",
-      "size": 1548167,
+      "size": 1553006,
       "versions": [
         {
-          "version": "2.1.0",
-          "buildVersion": "210",
+          "version": "2.1.1",
+          "buildVersion": "211",
           "date": "2026-11-13T12:00:00Z",
-          "localizedDescription": "Improved BLE reconnect, playback feedback, cached status, and file transfer recovery.",
+          "localizedDescription": "Improved BLE stability and confirmed contact sync after the watch saves your address book.",
           "downloadURL": "https://github.com/memeskii/WearBridgev2/releases/download/latest/AncsBridge-unsigned.ipa",
-          "size": 1548167,
+          "size": 1553006,
           "minOSVersion": "26.0"
         }
       ]
