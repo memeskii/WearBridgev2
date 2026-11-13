@@ -218,6 +218,26 @@ public class ReplyRelayManager: ObservableObject {
         sendReplyAck(ack)
     }
 
+    @MainActor
+    public func testWebhook() async -> String {
+        let reply = MessageReplyPayload(
+            replyId: UUID().uuidString,
+            threadKey: "wearbridge-diagnostics",
+            appBundleId: "com.wearos.ancsbridge.companion",
+            recipient: "",
+            senderName: "WearBridge",
+            replyText: "WearBridge Ping Test",
+            ancsUid: 9999
+        )
+        do {
+            let data = try JSONEncoder().encode(reply)
+            let (_, detail) = await relayViaWebhook(reply: reply, rawData: data)
+            return detail
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
     private func relayViaWebhook(reply: MessageReplyPayload, rawData: Data) async -> (String, String) {
         guard let url = URL(string: webhookUrl) else {
             return ("FAILED", "Invalid Webhook URL: \(webhookUrl)")

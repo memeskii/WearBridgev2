@@ -388,10 +388,8 @@ public struct DeviceSyncView: View {
 
     private func testRelayConnection() {
         relayTestStatus = "Testing webhook dispatch..."
-        relayManager.sendDirectReply(notificationUid: 9999, replyText: "WearBridge Ping Test") { success in
-            DispatchQueue.main.async {
-                self.relayTestStatus = success ? "✓ Webhook dispatched successfully!" : "✗ Webhook failed to respond"
-            }
+        Task { @MainActor in
+            relayTestStatus = await relayManager.testWebhook()
         }
     }
 
