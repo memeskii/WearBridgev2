@@ -75,12 +75,15 @@ jobs:
           retention-days: 14
 
       - name: Publish APKs to Rolling GitHub Release
-        if: github.ref == 'refs/heads/main' && hashFiles('WearBridge-WearOS-v2.1.0-release.apk') != ''
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if gh release view latest >/dev/null 2>&1; then
+          cp wearos-app/app/build/outputs/apk/debug/app-debug.apk WearBridge-WearOS-v2.1.0-debug.apk
+          if ! gh release view latest >/dev/null 2>&1; then
+            gh release create latest --title "WearBridge Latest Release" --notes "WearBridge builds."
+          fi
+          gh release upload latest WearBridge-WearOS-v2.1.0-debug.apk --clobber
+          if [ -f WearBridge-WearOS-v2.1.0-release.apk ]; then
             gh release upload latest WearBridge-WearOS-v2.1.0-release.apk --clobber
-          else
-            gh release create latest WearBridge-WearOS-v2.1.0-release.apk --title "WearBridge Latest Release" --notes "Signed Wear OS release APK."
           fi
