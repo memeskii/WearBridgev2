@@ -1,3 +1,4 @@
+import UIKit
 import Foundation
 import CoreLocation
 import os.log
@@ -60,7 +61,10 @@ public class WeatherSyncService: NSObject, ObservableObject {
     private let geocoder = CLGeocoder()
 
     private var syncTimer: Timer?
-    private var pendingCompletion: ((Result<CompactWeatherPayload, Error>) -> Void)?
+    private var pendingCompletions: [(Result<CompactWeatherPayload, Error>) -> Void] = []
+    private let cachedWeatherKey = "wearbridge_latest_weather"
+    private let refreshInterval: TimeInterval = 30 * 60
+    private var lastAutomaticAttempt = Date.distantPast
 
     private let userDefaultsLatitudeKey = "wearbridge_last_valid_latitude"
     private let userDefaultsLongitudeKey = "wearbridge_last_valid_longitude"
@@ -72,8 +76,6 @@ public class WeatherSyncService: NSObject, ObservableObject {
     @Published public var lastSyncDate: Date? = nil
     @Published public var locationName: String = "Locating..."
 
-    private var lastLocation: CLLocation?
-
     override private init() {
         super.init()
         locationManager.delegate = self
@@ -82,6 +84,12 @@ public class WeatherSyncService: NSObject, ObservableObject {
         // Load cached city name if available
         if let cachedCity = UserDefaults.standard.string(forKey: userDefaultsCityNameKey) {
             locationName = cachedCity
+        }
+
+        if let data = UserDefaults.standard.data(forKey: cachedWeatherKey),
+           let payload = try? JSONDecoder().decode(CompactWeatherPayload.self, from: data) {
+            latestWeather = payload
+            lastSyncDate = Date(timeIntervalSince1970: TimeInterval(payload.updatedAt))
         }
 
         // Start 30-minute recurring timer
@@ -93,7 +101,7 @@ public class WeatherSyncService: NSObject, ObservableObject {
         // 30 minutes = 1800 seconds
         syncTimer = Timer.scheduledTimer(withTimeInterval: 1800, repeats: true) { [weak self] _ in
             self?.logger.info("30-minute weather sync timer triggered")
-            self?.syncWeather(force: true)
+            self?.refreshIfDue()
         }
     }
 
@@ -108,7 +116,7 @@ public class WeatherSyncService: NSObject, ObservableObject {
         if status == .notDetermined {
             locationManager.requestWhenInUseAuthorization()
         } else if status == .authorizedWhenInUse || status == .authorizedAlways {
-            locationManager.requestLocation()
+            syncWeather()
         }
     }
 
@@ -124,9 +132,36 @@ public class WeatherSyncService: NSObject, ObservableObject {
         return nil
     }
 
+    func syncOnConnection() {
+        if let latestWeather, let data = try? JSONEncoder().encode(latestWeather) {
+            BLEServerManager.shared.sendWeatherPayload(data)
+        }
+        refreshIfDue()
+    }
+
+    func refreshIfDue() {
+        guard BLEServerManager.shared.hasCompanionSubscriber,
+              locationManager.authorizationStatus != .notDetermined,
+              !isFetching,
+              Date().timeIntervalSince(lastAutomaticAttempt) >= 5 * 60,
+              lastSyncDate.map({ Date().timeIntervalSince($0) >= refreshInterval }) ?? true else { return }
+        lastAutomaticAttempt = Date()
+        syncWeather()
+    }
+
     /// Fetch and sync weather data to watch over BLE Channel 0x03.
     public func syncWeather(force: Bool = false, completion: ((Result<CompactWeatherPayload, Error>) -> Void)? = nil) {
-        pendingCompletion = completion
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { self.syncWeather(force: force, completion: completion) }
+            return
+        }
+        if !force, let latestWeather, let lastSyncDate, Date().timeIntervalSince(lastSyncDate) < refreshInterval {
+            completion?(.success(latestWeather))
+            return
+        }
+        if let completion { pendingCompletions.append(completion) }
+        guard !isFetching else { return }
+        isFetching = true
 
         let status = locationManager.authorizationStatus
         if status == .notDetermined {
@@ -134,24 +169,23 @@ public class WeatherSyncService: NSObject, ObservableObject {
             return
         }
 
-        // Check if device is locked or location unavailable: immediately fall back to cached coordinates
-        if let location = locationManager.location {
-            lastLocation = location
+        guard status == .authorizedWhenInUse || status == .authorizedAlways else {
+            finishWithFailure(CLError(.denied))
+            return
+        }
+
+        if let location = locationManager.location,
+           abs(location.timestamp.timeIntervalSinceNow) < 15 * 60,
+           location.horizontalAccuracy >= 0 {
             fetchWeatherForLocation(location)
             return
         }
 
-        if let cached = getCachedLocationAndCity() {
-            logger.info("Using cached coordinates for background sync: \(cached.cityName) (\(cached.location.coordinate.latitude), \(cached.location.coordinate.longitude))")
-            lastLocation = cached.location
-            fetchWeatherForLocation(cached.location)
-            return
-        }
-
-        guard status == .authorizedWhenInUse || status == .authorizedAlways else {
-            logger.warning("Location access denied or restricted. Using fallback coordinate.")
-            let fallbackLocation = CLLocation(latitude: 37.3318, longitude: -122.0312)
-            fetchWeatherForLocation(fallbackLocation)
+        if UIApplication.shared.applicationState != .active,
+           let cached = getCachedLocationAndCity() {
+            queryOpenMeteo(latitude: cached.location.coordinate.latitude,
+                           longitude: cached.location.coordinate.longitude,
+                           cityName: cached.cityName)
             return
         }
 
@@ -160,10 +194,6 @@ public class WeatherSyncService: NSObject, ObservableObject {
     }
 
     private func fetchWeatherForLocation(_ location: CLLocation) {
-        DispatchQueue.main.async {
-            self.isFetching = true
-        }
-
         let lat = location.coordinate.latitude
         let lon = location.coordinate.longitude
 
@@ -306,16 +336,13 @@ public class WeatherSyncService: NSObject, ObservableObject {
 
             logger.info("Encoded compact weather payload (\(jsonData.count) bytes) for \(payload.cityName): \(payload.temp)°C, code \(payload.weatherCode)")
 
-            // Transmit over BLE Channel 0x03
-            BLEServerManager.shared.sendWeatherPayload(jsonData)
-
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
-                self.isFetching = false
+                UserDefaults.standard.set(jsonData, forKey: self.cachedWeatherKey)
+                BLEServerManager.shared.sendWeatherPayload(jsonData)
                 self.latestWeather = payload
                 self.lastSyncDate = Date()
-                self.pendingCompletion?(.success(payload))
-                self.pendingCompletion = nil
+                self.completeSync(.success(payload))
             }
         } catch {
             finishWithFailure(error)
@@ -326,11 +353,16 @@ public class WeatherSyncService: NSObject, ObservableObject {
         logger.error("Weather sync failed: \(error.localizedDescription)")
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            self.isFetching = false
-            self.pendingCompletion?(.failure(error))
-            self.pendingCompletion = nil
+            self.completeSync(.failure(error))
         }
     }
+    private func completeSync(_ result: Result<CompactWeatherPayload, Error>) {
+        let completions = pendingCompletions
+        pendingCompletions.removeAll()
+        isFetching = false
+        completions.forEach { $0(result) }
+    }
+
 }
 
 // MARK: - CLLocationManagerDelegate
@@ -340,13 +372,14 @@ extension WeatherSyncService: CLLocationManagerDelegate {
         let status = manager.authorizationStatus
         logger.info("Location authorization changed: \(status.rawValue)")
         if status == .authorizedWhenInUse || status == .authorizedAlways {
-            manager.requestLocation()
+            if isFetching { manager.requestLocation() }
+        } else if isFetching && (status == .denied || status == .restricted) {
+            finishWithFailure(CLError(.denied))
         }
     }
 
     public func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard let location = locations.last else { return }
-        lastLocation = location
+        guard isFetching, let location = locations.last else { return }
         fetchWeatherForLocation(location)
     }
 
@@ -354,11 +387,9 @@ extension WeatherSyncService: CLLocationManagerDelegate {
         logger.error("CoreLocation didFailWithError: \(error.localizedDescription)")
         if let cached = getCachedLocationAndCity() {
             logger.info("CoreLocation failed (device likely locked). Falling back to cached coordinates: \(cached.cityName)")
-            lastLocation = cached.location
             queryOpenMeteo(latitude: cached.location.coordinate.latitude, longitude: cached.location.coordinate.longitude, cityName: cached.cityName)
         } else {
-            let fallback = lastLocation ?? CLLocation(latitude: 37.3318, longitude: -122.0312)
-            fetchWeatherForLocation(fallback)
+            finishWithFailure(error)
         }
     }
 }

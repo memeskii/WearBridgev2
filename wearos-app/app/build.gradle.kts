@@ -5,6 +5,13 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
+val releaseStore = providers.environmentVariable("WEARBRIDGE_RELEASE_STORE")
+val releaseStorePassword = providers.environmentVariable("WEARBRIDGE_RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = providers.environmentVariable("WEARBRIDGE_RELEASE_KEY_ALIAS")
+val releaseKeyPassword = providers.environmentVariable("WEARBRIDGE_RELEASE_KEY_PASSWORD")
+val hasReleaseSigning = listOf(releaseStore, releaseStorePassword, releaseKeyAlias, releaseKeyPassword)
+    .all { it.isPresent }
+
 android {
     namespace = "com.wearos.ancsbridge"
     compileSdk = 35
@@ -13,22 +20,18 @@ android {
         applicationId = "com.wearos.ancsbridge"
         minSdk = 33 // Wear OS 4
         targetSdk = 35
-        versionCode = 200
-        versionName = "2.0.0"
+        versionCode = 210
+        versionName = "2.1.0"
     }
 
     signingConfigs {
-        create("release") {
-            storeFile = file("../wearbridge-signing.keystore")
-            storePassword = "wearbridge_release_pass"
-            keyAlias = "wearbridge"
-            keyPassword = "wearbridge_release_pass"
-        }
-        getByName("debug") {
-            storeFile = file("../wearbridge-signing.keystore")
-            storePassword = "wearbridge_release_pass"
-            keyAlias = "wearbridge"
-            keyPassword = "wearbridge_release_pass"
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(releaseStore.get())
+                storePassword = releaseStorePassword.get()
+                keyAlias = releaseKeyAlias.get()
+                keyPassword = releaseKeyPassword.get()
+            }
         }
     }
 
@@ -36,14 +39,11 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName("release")
+            if (hasReleaseSigning) signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-        }
-        debug {
-            signingConfig = signingConfigs.getByName("debug")
         }
     }
 
@@ -71,6 +71,7 @@ android {
 }
 
 dependencies {
+    implementation("androidx.concurrent:concurrent-futures:1.1.0")
     // Wear OS
     implementation("com.google.android.gms:play-services-wearable:18.2.0")
 

@@ -12,7 +12,13 @@ import androidx.wear.protolayout.TypeBuilders
 import androidx.wear.tiles.RequestBuilders
 import androidx.wear.tiles.TileBuilders
 import androidx.wear.tiles.TileService
+import androidx.concurrent.futures.CallbackToFutureAdapter
 import com.google.common.util.concurrent.ListenableFuture
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
 
@@ -48,27 +54,45 @@ class WeatherTileService : TileService() {
         return ImmediateFuture(resources)
     }
 
+    private val tileScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    override fun onDestroy() {
+        tileScope.cancel()
+        super.onDestroy()
+    }
+
     override fun onTileRequest(
         requestParams: RequestBuilders.TileRequest
-    ): ListenableFuture<TileBuilders.Tile> {
-        val weather = WeatherRepository.getInstance(this).getLatestWeather()
-        val layout = buildTileLayout(weather)
-
-        val timeline = TimelineBuilders.Timeline.Builder()
-            .addTimelineEntry(
-                TimelineBuilders.TimelineEntry.Builder()
-                    .setLayout(layout)
+    ): ListenableFuture<TileBuilders.Tile> = CallbackToFutureAdapter.getFuture { completer ->
+        val job = tileScope.launch {
+            try {
+                val weather = WeatherRepository.getInstance(this@WeatherTileService).getLatestWeather()
+                val timeline = TimelineBuilders.Timeline.Builder()
+                    .addTimelineEntry(
+                        TimelineBuilders.TimelineEntry.Builder()
+                            .setLayout(buildTileLayout(weather))
+                            .build()
+                    )
                     .build()
-            )
-            .build()
 
-        val tile = TileBuilders.Tile.Builder()
-            .setResourcesVersion(RESOURCES_VERSION)
-            .setTileTimeline(timeline)
-            .setFreshnessIntervalMillis(30 * 60 * 1000L) // 30 mins
-            .build()
-
-        return ImmediateFuture(tile)
+                completer.set(
+                    TileBuilders.Tile.Builder()
+                        .setResourcesVersion(RESOURCES_VERSION)
+                        .setTileTimeline(timeline)
+                        .setFreshnessIntervalMillis(30 * 60 * 1000L)
+                        .build()
+                )
+            } catch (error: Exception) {
+                if (error is java.util.concurrent.CancellationException) throw error
+                completer.setException(error)
+            }
+        }
+        job.invokeOnCompletion { error ->
+            if (error is java.util.concurrent.CancellationException) completer.setCancelled()
+            else if (error != null) completer.setException(error)
+        }
+        completer.addCancellationListener({ job.cancel() }, Executor { it.run() })
+        "WearBridge weather tile"
     }
 
     private fun buildTileLayout(weather: WeatherData?): LayoutElementBuilders.Layout {

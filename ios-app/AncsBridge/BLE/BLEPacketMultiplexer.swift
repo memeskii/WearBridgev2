@@ -114,7 +114,6 @@ public class BLEPacketMultiplexer: ObservableObject {
 
     /// Reassembly state per channel
     private var reassemblyBuffers: [ChannelID: Data] = [:]
-    private var expectedSeqNumbers: [ChannelID: UInt16] = [:]
 
     /// Callbacks for reassembled full payloads
     public var onPayloadReceived: ((ChannelID, Data) -> Void)?
@@ -182,20 +181,20 @@ public class BLEPacketMultiplexer: ObservableObject {
         // Handle Reassembly
         if flags.contains(.startOfTransfer) {
             reassemblyBuffers[channel] = Data()
-            expectedSeqNumbers[channel] = 0
         }
 
-        if reassemblyBuffers[channel] == nil {
-            reassemblyBuffers[channel] = Data()
+        guard let bufferedBytes = reassemblyBuffers[channel]?.count else { return }
+        let maxPayloadBytes = channel == .binaryFile ? FileTransferManager.windowSizeBytes + 1 : 4 * 1024 * 1024
+        guard chunkPayload.count <= maxPayloadBytes + MemoryLayout<UInt32>.size - bufferedBytes else {
+            reassemblyBuffers.removeValue(forKey: channel)
+            sendCrcError(channel: channel, sequenceNumber: seq)
+            return
         }
-
         reassemblyBuffers[channel]?.append(chunkPayload)
-        expectedSeqNumbers[channel] = seq + 1
 
         if flags.contains(.endOfTransfer) {
             guard let fullBuffer = reassemblyBuffers[channel] else { return }
             reassemblyBuffers.removeValue(forKey: channel)
-            expectedSeqNumbers.removeValue(forKey: channel)
 
             // Verify trailing CRC32
             guard fullBuffer.count >= 4 else {

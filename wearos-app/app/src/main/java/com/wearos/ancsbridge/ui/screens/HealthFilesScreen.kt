@@ -16,7 +16,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,8 +56,8 @@ fun HealthFilesScreen() {
     val otaUpdater = remember { WatchOtaUpdater.getInstance(context) }
 
     var telemetry by remember { mutableStateOf(healthRepo.getCachedPayload()) }
-    val files by installer.receivedFiles.collectAsState()
-    val otaState by otaUpdater.otaProgress.collectAsState()
+    val files by installer.receivedFiles.collectAsStateWithLifecycle()
+    val otaState by otaUpdater.otaProgress.collectAsStateWithLifecycle()
 
     var isSyncingHealth by remember { mutableStateOf(false) }
 
@@ -204,23 +204,29 @@ fun HealthFilesScreen() {
                         .fillMaxWidth()
                         .padding(8.dp)
                 ) {
-                    val cal = telemetry?.calories?.total ?: 2150.0
-                    val spo2 = telemetry?.spo2?.latest ?: 98
-                    val sleepMin = telemetry?.sleep?.totalDurationMinutes ?: 445
-                    val stress = telemetry?.stress?.stressScore ?: 32
+                    Text(
+                        text = telemetry?.let { "Updated ${updatedTime(it.timestamp * 1000L)}" }
+                            ?: "No health data synced",
+                        fontSize = 10.sp,
+                        color = Color.LightGray
+                    )
+                    val cal = telemetry?.calories?.total
+                    val spo2 = telemetry?.spo2?.latest
+                    val sleepMin = telemetry?.sleep?.totalDurationMinutes
+                    val stress = telemetry?.stress?.stressScore
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = "🔥 ${cal.toInt()} kcal",
+                            text = cal?.let { "${it.toInt()} kcal" } ?: "Calories unavailable",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFFFF7043)
                         )
                         Text(
-                            text = "🫁 SpO2: $spo2%",
+                            text = spo2?.let { "SpO₂ $it%" } ?: "SpO₂ unavailable",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFF26A69A)
@@ -234,12 +240,12 @@ fun HealthFilesScreen() {
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = "💤 Sleep: ${sleepMin / 60}h ${sleepMin % 60}m",
+                            text = sleepMin?.let { "Sleep ${it / 60}h ${it % 60}m" } ?: "Sleep unavailable",
                             fontSize = 10.sp,
                             color = Color(0xFFB39DDB)
                         )
                         Text(
-                            text = "🧘 Stress: $stress",
+                            text = stress?.let { "Stress $it" } ?: "Stress unavailable",
                             fontSize = 10.sp,
                             color = Color(0xFF90CAF9)
                         )

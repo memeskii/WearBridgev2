@@ -161,8 +161,14 @@ public final class WatchFaceStoreManager: ObservableObject {
         ]
     }
 
-    // MARK: - Download & Mock Generation
+    // MARK: - Package Download
     public func downloadOrPreparePackage(for item: WatchFaceItem, completion: @escaping (Result<URL, Error>) -> Void) {
+        guard let downloadUrlString = item.downloadUrl, let downloadUrl = URL(string: downloadUrlString) else {
+            completion(.failure(NSError(domain: "WearBridge", code: -20, userInfo: [
+                NSLocalizedDescriptionKey: "This showcase face has no installable package. Import a watch face file to send it to your watch."
+            ])))
+            return
+        }
         let destination = watchFacesDirectory.appendingPathComponent(item.fileName)
 
         if FileManager.default.fileExists(atPath: destination.path) {
@@ -170,82 +176,31 @@ public final class WatchFaceStoreManager: ObservableObject {
             return
         }
 
-        if let downloadUrlString = item.downloadUrl, let downloadUrl = URL(string: downloadUrlString) {
-            URLSession.shared.downloadTask(with: downloadUrl) { tempUrl, response, error in
-                if let error = error {
-                    DispatchQueue.main.async { completion(.failure(error)) }
-                    return
-                }
-                guard let tempUrl = tempUrl else {
-                    DispatchQueue.main.async {
-                        completion(.failure(NSError(domain: "WearBridge", code: -20, userInfo: [NSLocalizedDescriptionKey: "Download failed"])))
-                    }
-                    return
-                }
-                do {
-                    if FileManager.default.fileExists(atPath: destination.path) {
-                        try FileManager.default.removeItem(at: destination)
-                    }
-                    try FileManager.default.moveItem(at: tempUrl, to: destination)
-                    DispatchQueue.main.async {
-                        self.refreshDownloadedFiles()
-                        completion(.success(destination))
-                    }
-                } catch {
-                    DispatchQueue.main.async { completion(.failure(error)) }
-                }
-            }.resume()
-        } else {
-            // Built-in package: generate deterministic synthetic package on disk
-            generateMockPackage(item: item, destination: destination, completion: completion)
-        }
-    }
-
-    private func generateMockPackage(item: WatchFaceItem, destination: URL, completion: @escaping (Result<URL, Error>) -> Void) {
-        DispatchQueue.global(qos: .userInitiated).async {
-            var data = Data()
-
-            // Standard ZIP / APK file header: 0x50 0x4B 0x03 0x04 ("PK\03\04")
-            data.append(contentsOf: [0x50, 0x4B, 0x03, 0x04])
-            data.append(contentsOf: [0x14, 0x00, 0x00, 0x00, 0x08, 0x00]) // version & flags
-
-            // Meta payload: manifest JSON
-            let manifestJson = """
-            {
-              "packageName": "com.wearbridge.watchface.\(item.id)",
-              "title": "\(item.title)",
-              "author": "\(item.author)",
-              "version": "\(item.version)",
-              "type": "\(item.fileType)"
+        URLSession.shared.downloadTask(with: downloadUrl) { tempUrl, response, error in
+            if let error = error {
+                DispatchQueue.main.async { completion(.failure(error)) }
+                return
             }
-            """
-            if let manifestData = manifestJson.data(using: .utf8) {
-                data.append(manifestData)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+                  let tempUrl = tempUrl else {
+                DispatchQueue.main.async {
+                    completion(.failure(NSError(domain: "WearBridge", code: -20, userInfo: [NSLocalizedDescriptionKey: "Download failed"])))
+                }
+                return
             }
-
-            // Pad deterministic bytes up to item.fileSize
-            let remaining = max(0, item.fileSize - data.count)
-            var filler = [UInt8](repeating: 0, count: remaining)
-            for i in 0..<remaining {
-                filler[i] = UInt8((i * 37 + 13) & 0xFF)
-            }
-            data.append(contentsOf: filler)
-
             do {
                 if FileManager.default.fileExists(atPath: destination.path) {
                     try FileManager.default.removeItem(at: destination)
                 }
-                try data.write(to: destination, options: .atomic)
+                try FileManager.default.moveItem(at: tempUrl, to: destination)
                 DispatchQueue.main.async {
                     self.refreshDownloadedFiles()
                     completion(.success(destination))
                 }
             } catch {
-                DispatchQueue.main.async {
-                    completion(.failure(error))
-                }
+                DispatchQueue.main.async { completion(.failure(error)) }
             }
-        }
+        }.resume()
     }
 
     // MARK: - File Management

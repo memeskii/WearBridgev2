@@ -66,7 +66,7 @@ class WatchFaceInstaller private constructor(private val context: Context) {
                     return@launch
                 }
 
-                val files = dir.listFiles() ?: emptyArray()
+                val files = dir.listFiles { file -> file.isFile } ?: emptyArray()
                 val items = files.map { file ->
                     val status = fileStatusMap[file.name] ?: ReceivedFileItem.STATUS_READY
                     val error = fileErrorMap[file.name]

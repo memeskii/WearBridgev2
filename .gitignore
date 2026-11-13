@@ -70,3 +70,8 @@ Package.resolved
 .agent/
 __pycache__/
 *.pyc
+
+# Android signing material and compiler state
+*.keystore
+*.jks
+.kotlin/

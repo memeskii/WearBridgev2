@@ -51,7 +51,7 @@ import androidx.wear.compose.material3.Button
 import androidx.wear.compose.material3.Text
 import com.wearos.ancsbridge.ancs.AppIconRenderer
 import com.wearos.ancsbridge.ancs.AppIconResolver
-import com.wearos.ancsbridge.ble.BLEClientService
+import com.wearos.ancsbridge.ble.BleConnectionManager
 import com.wearos.ancsbridge.model.AncsNotification
 
 /**
@@ -139,12 +139,13 @@ fun NotificationScreen(
  */
 @Composable
 fun NotificationScreen(
-    bleClientService: BLEClientService?,
+    connectionManager: BleConnectionManager? = null,
     notificationUid: Int = 1001,
     title: String = "Sarah Jenkins",
     message: String = "Are you available for a quick sync before the meeting?",
     appName: String = "Messages",
-    bundleId: String = "com.apple.MobileSMS"
+    bundleId: String = "com.apple.MobileSMS",
+    onSendReply: ((notificationUid: Int, replyText: String) -> Boolean)? = null
 ) {
     NotificationScreen(
         notifications = listOf(
@@ -163,7 +164,9 @@ fun NotificationScreen(
             )
         ),
         onSendReply = { uid, replyText ->
-            bleClientService?.sendQuickReply(uid, replyText) ?: true
+            onSendReply?.invoke(uid, replyText)
+                ?: connectionManager?.sendQuickReply(uid, replyText)
+                ?: true
         },
         onDismiss = {}
     )

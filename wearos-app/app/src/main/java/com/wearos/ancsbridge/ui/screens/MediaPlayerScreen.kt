@@ -26,7 +26,7 @@ import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -56,7 +56,7 @@ import com.wearos.ancsbridge.media.MediaPlayerRepository
 fun MediaPlayerScreen() {
     val context = LocalContext.current
     val mediaRepo = remember { MediaPlayerRepository.getInstance(context) }
-    val mediaState by mediaRepo.uiState.collectAsState()
+    val mediaState by mediaRepo.uiState.collectAsStateWithLifecycle()
 
     val focusRequester = remember { FocusRequester() }
     val vibrator = remember { context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator }
@@ -150,6 +150,10 @@ fun MediaPlayerScreen() {
             )
 
             // Artist Name
+            mediaState.playbackFeedback?.let { message ->
+                Text(text = message, fontSize = 10.sp, color = Color.LightGray)
+            }
+
             Text(
                 text = mediaState.artist.ifEmpty { "Open Music or Spotify on iPhone" },
                 fontSize = 11.sp,

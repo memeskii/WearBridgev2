@@ -13,11 +13,12 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
+import java.io.IOException
 
 val Context.weatherDataStore: DataStore<Preferences> by preferencesDataStore(name = "wearbridge_weather")
 
@@ -36,6 +37,7 @@ class WeatherRepository private constructor(private val context: Context) {
 
         fun getInstance(context: Context): WeatherRepository {
             return INSTANCE ?: synchronized(this) {
+                INSTANCE?.let { return it }
                 val instance = WeatherRepository(context.applicationContext)
                 INSTANCE = instance
                 instance
@@ -45,7 +47,11 @@ class WeatherRepository private constructor(private val context: Context) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    val weatherFlow: Flow<WeatherData?> = context.weatherDataStore.data.map { preferences ->
+    val weatherFlow: Flow<WeatherData?> = context.weatherDataStore.data.catch { error ->
+        if (error !is IOException) throw error
+        Log.w(TAG, "Unable to read cached weather", error)
+        emit(androidx.datastore.preferences.core.emptyPreferences())
+    }.map { preferences ->
         val json = preferences[KEY_WEATHER_JSON]
         if (!json.isNullOrEmpty()) {
             WeatherData.fromJsonString(json)
@@ -60,22 +66,12 @@ class WeatherRepository private constructor(private val context: Context) {
         initialValue = null
     )
 
-    /**
-     * Get synchronous snapshot of latest weather, useful for Wear OS Tile rendering.
-     */
-    fun getLatestWeather(): WeatherData? {
-        weatherState.value?.let { return it }
-        return runBlocking(Dispatchers.IO) {
-            val prefs = context.weatherDataStore.data.firstOrNull()
-            val json = prefs?.get(KEY_WEATHER_JSON)
-            if (!json.isNullOrEmpty()) WeatherData.fromJsonString(json) else null
-        }
-    }
+    suspend fun getLatestWeather(): WeatherData? = weatherState.value ?: weatherFlow.first()
 
     /**
      * Save weather payload received from Channel 0x03.
      */
-    fun saveWeather(payload: ByteArray, onComplete: ((Boolean) -> Void)? = null) {
+    fun saveWeather(payload: ByteArray) {
         val jsonStr = String(payload, Charsets.UTF_8)
         saveWeatherJson(jsonStr)
     }

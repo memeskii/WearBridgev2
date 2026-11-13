@@ -22,7 +22,6 @@ import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.WbSunny
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,15 +44,39 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+
 @SuppressLint("MissingPermission")
 @Composable
 fun StatusWeatherScreen(viewModel: MainViewModel) {
-    val connectionState by viewModel.connectionState.collectAsState()
-    val isScanning by viewModel.isScanning.collectAsState()
-    val scanStatus by viewModel.scanStatus.collectAsState()
-    val batteryLevel by viewModel.watchBatteryLevel.collectAsState()
-    val isCharging by viewModel.isWatchCharging.collectAsState()
-    val weatherData by viewModel.weatherData.collectAsState()
+    val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
+    val isScanning by viewModel.isScanning.collectAsStateWithLifecycle()
+    val scanStatus by viewModel.scanStatus.collectAsStateWithLifecycle()
+    val batteryLevel by viewModel.watchBatteryLevel.collectAsStateWithLifecycle()
+    val isCharging by viewModel.isWatchCharging.collectAsStateWithLifecycle()
+    val companionConnected by viewModel.companionConnected.collectAsStateWithLifecycle()
+    val weatherData by viewModel.weatherData.collectAsStateWithLifecycle()
+
+    val context = LocalContext.current
+    val phoneStatus = remember(context) {
+        context.getSharedPreferences("phone_status", android.content.Context.MODE_PRIVATE)
+    }
+    val phoneBattery = remember(phoneStatus) { mutableIntStateOf(phoneStatus.getInt("battery", -1)) }
+    val batteryUpdatedAt = remember(phoneStatus) {
+        androidx.compose.runtime.mutableLongStateOf(phoneStatus.getLong("updatedAt", 0L))
+    }
+    DisposableEffect(phoneStatus) {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
+            if (key == "battery") phoneBattery.intValue = prefs.getInt("battery", -1)
+            if (key == "updatedAt") batteryUpdatedAt.longValue = prefs.getLong("updatedAt", 0L)
+        }
+        phoneStatus.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { phoneStatus.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
 
     val isConnected = connectionState is ConnectionState.Connected
     val deviceName = when (val state = connectionState) {
@@ -119,10 +142,22 @@ fun StatusWeatherScreen(viewModel: MainViewModel) {
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = if (isConnected) "Connected • Channel 0x01-0x07" else if (isScanning) "Searching..." else "Tap to Connect",
+                            text = if (isConnected) "Notifications connected" else if (isScanning) "Searching..." else "Tap to Connect",
                             fontSize = 10.sp,
                             color = if (isConnected) Color(0xFF81C784) else Color(0xFFFFB74D)
                         )
+                        Text(
+                            text = if (companionConnected) "Companion sync active" else "Companion sync offline",
+                            fontSize = 10.sp,
+                            color = Color.LightGray
+                        )
+                        if (phoneBattery.intValue in 0..100) {
+                            Text(
+                                text = "iPhone ${phoneBattery.intValue}% · ${updatedTime(batteryUpdatedAt.longValue)}",
+                                fontSize = 10.sp,
+                                color = Color.LightGray
+                            )
+                        }
                     }
 
                     if (batteryLevel != null) {
@@ -168,13 +203,13 @@ fun StatusWeatherScreen(viewModel: MainViewModel) {
                     ) {
                         Column {
                             Text(
-                                text = weatherData?.cityName ?: "Cupertino",
+                                text = weatherData?.cityName ?: "Weather",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFF90CAF9)
                             )
                             Text(
-                                text = weatherData?.conditionDescription() ?: "Mostly Clear",
+                                text = weatherData?.conditionDescription() ?: "Waiting for iPhone sync",
                                 fontSize = 10.sp,
                                 color = Color.LightGray
                             )
@@ -182,15 +217,10 @@ fun StatusWeatherScreen(viewModel: MainViewModel) {
 
                         Row(verticalAlignment = Alignment.Top) {
                             Text(
-                                text = String.format(Locale.US, "%.0f", weatherData?.temp ?: 21.0),
+                                text = weatherData?.let { String.format(Locale.getDefault(), "%.0f°", it.temp) }.orEmpty(),
                                 fontSize = 26.sp,
                                 fontWeight = FontWeight.Light,
                                 color = Color.White
-                            )
-                            Text(
-                                text = "°",
-                                fontSize = 16.sp,
-                                color = Color.LightGray
                             )
                         }
                     }
@@ -202,12 +232,12 @@ fun StatusWeatherScreen(viewModel: MainViewModel) {
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = String.format(Locale.US, "H: %.0f° L: %.0f°", weatherData?.high ?: 24.0, weatherData?.low ?: 15.0),
+                            text = weatherData?.let { String.format(Locale.getDefault(), "H: %.0f° L: %.0f°", it.high, it.low) }.orEmpty(),
                             fontSize = 9.sp,
                             color = Color.Gray
                         )
                         Text(
-                            text = "Channel 0x03",
+                            text = weatherData?.let { "Updated ${updatedTime(it.updatedAt * 1000L)}" }.orEmpty(),
                             fontSize = 9.sp,
                             color = Color(0xFF64B5F6)
                         )
@@ -293,4 +323,12 @@ fun StatusWeatherScreen(viewModel: MainViewModel) {
             }
         }
     }
+}
+
+internal fun updatedTime(timestamp: Long): String {
+    if (timestamp <= 0L) return "time unknown"
+    return java.text.DateFormat.getDateTimeInstance(
+        java.text.DateFormat.SHORT,
+        java.text.DateFormat.SHORT
+    ).format(Date(timestamp))
 }

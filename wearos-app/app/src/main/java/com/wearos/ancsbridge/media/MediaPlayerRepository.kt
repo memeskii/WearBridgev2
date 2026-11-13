@@ -27,6 +27,7 @@ data class MediaPlayerUiState(
     val artist: String = "",
     val album: String = "",
     val isPlaying: Boolean = false,
+    val playbackFeedback: String? = null,
     val playbackRate: Float = 1.0f,
     val durationSeconds: Double = 0.0,
     val currentPositionSeconds: Double = 0.0,
@@ -88,6 +89,8 @@ class MediaPlayerRepository private constructor(private val context: Context) {
     // Outbound dispatcher for Channel 0x05 commands (wired to BleConnectionManager)
     var outboundChannelSender: ((Byte, ByteArray) -> Boolean)? = null
 
+    private var pendingPlayback: Boolean? = null
+    private var playbackTimeout: Job? = null
     private var progressTickerJob: Job? = null
     private var artFetchJob: Job? = null
     private var lastAmsState: AmsMediaState = AmsMediaState()
@@ -123,12 +126,15 @@ class MediaPlayerRepository private constructor(private val context: Context) {
             amsState.elapsedTime
         }
 
+        val playing = reconcilePlayback(amsState.isPlaying)
         _uiState.update { current ->
+            val sameTrack = current.title == amsState.title && current.artist == amsState.artist
             current.copy(
+                artwork = current.artwork.takeIf { sameTrack },
                 title = amsState.title,
                 artist = amsState.artist,
                 album = amsState.album,
-                isPlaying = amsState.isPlaying,
+                isPlaying = playing,
                 playbackRate = amsState.playbackRate,
                 durationSeconds = amsState.durationSeconds,
                 currentPositionSeconds = interpolated,
@@ -139,12 +145,12 @@ class MediaPlayerRepository private constructor(private val context: Context) {
             )
         }
 
-        updateProgressTicker(amsState.isPlaying)
+        updateProgressTicker(playing)
     }
 
     private fun updateProgressTicker(isPlaying: Boolean) {
         if (isPlaying) {
-            if (progressTickerJob == null || !progressTickerJob!!.isActive) {
+            if (progressTickerJob?.isActive != true) {
                 progressTickerJob = scope.launch {
                     while (isActive) {
                         delay(1000L)
@@ -211,46 +217,159 @@ class MediaPlayerRepository private constructor(private val context: Context) {
     }
 
     /**
-     * Handles inbound Channel 0x05 MediaQoLPayload from iOS.
-     * Schema: {"trackKey": "...", "durationSeconds": ..., "audioRouteName": "...", "artworkBase64": "..."}
+     * Handles inbound Channel 0x05 MediaQoLPayload and MediaStateSyncPayload from iOS.
+     * Merges full state (title, artist, album, isPlaying, progress, route, art)
+     * so watch media player works seamlessly even if AMS is not ready.
      */
     fun handleMediaQoLPayload(payload: ByteArray) {
         try {
             val jsonStr = String(payload, Charsets.UTF_8)
-            Log.i(TAG, "Received Channel 0x05 MediaQoL payload: ${jsonStr.length} chars")
+            Log.d(TAG, "Received Channel 0x05 Media payload: ${jsonStr.length} chars")
 
             val json = JSONObject(jsonStr)
+            val isFullState = json.optString("cmd") == "MEDIA_STATE"
+            val isClearState = isFullState && json.optString("title").isBlank() &&
+                !json.optBoolean("isPlaying") && lastAmsState.title.isBlank()
+
+            val title = json.optString("title", "")
+            val artist = json.optString("artist", "")
+            val album = json.optString("album", "")
+            val hasIsPlaying = json.has("isPlaying")
+            val isPlaying = json.optBoolean("isPlaying", _uiState.value.isPlaying)
+            val playbackRate = json.optDouble("playbackRate", 1.0).toFloat()
+            val elapsed = json.optDouble("elapsedSeconds", -1.0)
             val duration = json.optDouble("durationSeconds", _uiState.value.durationSeconds)
-            val route = json.optString("audioRouteName", "iPhone")
+            val volume = json.optDouble("volume", _uiState.value.volume.toDouble()).toFloat()
+            val route = json.optString("audioRouteName", "")
             val base64Art = json.optString("artworkBase64", "")
 
             var decodedBitmap: Bitmap? = null
             if (base64Art.isNotBlank()) {
-                val imageBytes = Base64.decode(base64Art, Base64.DEFAULT)
-                decodedBitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
-                Log.i(TAG, "Decoded album artwork bitmap: ${decodedBitmap?.width}x${decodedBitmap?.height} (${imageBytes.size} bytes)")
+                try {
+                    val imageBytes = Base64.decode(base64Art, Base64.DEFAULT)
+                    decodedBitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+                    Log.i(TAG, "Decoded album artwork bitmap: ${decodedBitmap?.width}x${decodedBitmap?.height} (${imageBytes.size} bytes)")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to decode base64 artwork: ${e.message}")
+                }
             }
 
+            if (isClearState) {
+                _uiState.update { it.copy(title = "", artist = "", album = "", artwork = null,
+                    durationSeconds = 0.0, currentPositionSeconds = 0.0, isPlaying = false) }
+                lastAmsState = AmsMediaState()
+                updateProgressTicker(false)
+                return
+            }
+            if (isFullState && title.isBlank()) return
+            val displayedPlayback = if (hasIsPlaying) reconcilePlayback(isPlaying) else _uiState.value.isPlaying
             _uiState.update { current ->
+                val changedTrack = title.isNotBlank() && (title != current.title || artist != current.artist)
                 current.copy(
+                    title = if (title.isNotBlank()) title else current.title,
+                    artist = if (artist.isNotBlank()) artist else current.artist,
+                    album = if (album.isNotBlank()) album else current.album,
+                    isPlaying = displayedPlayback,
+                    playbackRate = playbackRate,
+                    currentPositionSeconds = if (elapsed >= 0) elapsed else current.currentPositionSeconds,
                     durationSeconds = if (duration > 0) duration else current.durationSeconds,
+                    volume = volume.coerceIn(0.0f, 1.0f),
                     audioRouteName = if (route.isNotBlank()) route else current.audioRouteName,
-                    artwork = decodedBitmap ?: current.artwork
+                    artwork = decodedBitmap ?: current.artwork.takeUnless { changedTrack }
                 )
+            }
+
+            if (hasIsPlaying) {
+                lastAmsState = lastAmsState.copy(
+                    isPlaying = isPlaying,
+                    title = if (title.isNotBlank()) title else lastAmsState.title,
+                    artist = if (artist.isNotBlank()) artist else lastAmsState.artist,
+                    durationSeconds = if (duration > 0) duration else lastAmsState.durationSeconds,
+                    elapsedTime = if (elapsed >= 0) elapsed else lastAmsState.elapsedTime,
+                    lastReportTimestamp = System.currentTimeMillis()
+                )
+                updateProgressTicker(displayedPlayback)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing Channel 0x05 payload: ${e.message}")
         }
     }
 
-    // Proxy commands to AmsMediaManager
-    fun sendPlay() = amsManager.sendPlay()
-    fun sendPause() = amsManager.sendPause()
-    fun togglePlayPause() = amsManager.togglePlayPause()
-    fun nextTrack() = amsManager.nextTrack()
-    fun previousTrack() = amsManager.previousTrack()
-    fun volumeUp() = amsManager.volumeUp()
-    fun volumeDown() = amsManager.volumeDown()
+    /**
+     * Dispatches active MEDIA_CONTROL action over Channel 0x05 to iOS companion app.
+     */
+    fun dispatchMediaControl(action: String): Boolean {
+        return try {
+            val json = JSONObject().apply {
+                put("cmd", "MEDIA_CONTROL")
+                put("action", action)
+                put("timestamp", System.currentTimeMillis())
+            }
+            val data = json.toString().toByteArray(Charsets.UTF_8)
+            outboundChannelSender?.invoke(BLEPacketMultiplexer.CHANNEL_MEDIA_QOL, data) == true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to dispatch MEDIA_CONTROL action: ${e.message}")
+            false
+        }
+    }
+
+    fun sendPlay() = setPlayback(true)
+
+    fun sendPause() = setPlayback(false)
+
+    fun togglePlayPause() = setPlayback(!_uiState.value.isPlaying)
+
+    private fun reconcilePlayback(confirmed: Boolean): Boolean {
+        val requested = pendingPlayback ?: return confirmed
+        if (requested == confirmed) {
+            pendingPlayback = null
+            playbackTimeout?.cancel()
+            _uiState.update { it.copy(playbackFeedback = null) }
+        }
+        return requested
+    }
+
+    private fun setPlayback(playing: Boolean) {
+        val queued = if (playing) amsManager.sendPlay() else amsManager.sendPause()
+        if (!queued && !dispatchMediaControl(if (playing) "PLAY" else "PAUSE")) {
+            _uiState.update { it.copy(playbackFeedback = "iPhone unavailable") }
+            return
+        }
+        playbackTimeout?.cancel()
+        pendingPlayback = playing
+        _uiState.update { it.copy(isPlaying = playing, playbackFeedback = "Waiting for iPhone…") }
+        updateProgressTicker(playing)
+        playbackTimeout = scope.launch {
+            delay(5_000)
+            pendingPlayback = null
+            val confirmed = lastAmsState.isPlaying
+            _uiState.update { it.copy(isPlaying = confirmed, playbackFeedback = "Playback unconfirmed") }
+            updateProgressTicker(confirmed)
+            delay(3_000)
+            _uiState.update { it.copy(playbackFeedback = null) }
+        }
+    }
+
+    fun nextTrack() {
+        if (!amsManager.nextTrack()) dispatchMediaControl("NEXT")
+    }
+
+    fun previousTrack() {
+        if (!amsManager.previousTrack()) dispatchMediaControl("PREV")
+    }
+
+    fun volumeUp() = adjustVolume(true)
+
+    fun volumeDown() = adjustVolume(false)
+
+    private fun adjustVolume(up: Boolean) {
+        val queued = if (up) amsManager.volumeUp() else amsManager.volumeDown()
+        if (queued || dispatchMediaControl(if (up) "VOL_UP" else "VOL_DOWN")) {
+            val delta = if (up) 0.06f else -0.06f
+            _uiState.update { it.copy(volume = (it.volume + delta).coerceIn(0f, 1f)) }
+        }
+    }
+
     fun advanceRepeatMode() = amsManager.advanceRepeatMode()
     fun advanceShuffleMode() = amsManager.advanceShuffleMode()
 }

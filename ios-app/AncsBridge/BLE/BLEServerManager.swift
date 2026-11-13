@@ -49,11 +49,12 @@ public class BLEServerManager: NSObject, ObservableObject {
 
     // Subscribed Centrals & MTU
     private var subscribedCentrals = Set<CBCentral>()
+    var hasCompanionSubscriber: Bool { !subscribedCentrals.isEmpty }
     @Published public var negotiatedMTU: Int = 512
     @Published public var rssiValue: Int? = nil
 
     // Outbound chunk queue for MTU-sized chunks
-    private var outboundQueue: [Data] = []
+    private var outboundQueue: ArraySlice<Data> = []
     private var isFlushingQueue = false
 
     // Active test callbacks
@@ -120,7 +121,7 @@ public class BLEServerManager: NSObject, ObservableObject {
     private func setupServices() {
         guard !serviceAdded else { return }
 
-        statusCharacteristic = CBMutableCharacteristic(
+        let status = CBMutableCharacteristic(
             type: Self.connectionStatusUUID,
             properties: [.read, .notify],
             value: nil,
@@ -128,14 +129,14 @@ public class BLEServerManager: NSObject, ObservableObject {
         )
 
         // Updated with notify & read permissions for bi-directional multiplexer
-        quickReplyCharacteristic = CBMutableCharacteristic(
+        let bridge = CBMutableCharacteristic(
             type: Self.quickReplyCharacteristicUUID,
             properties: [.write, .writeWithoutResponse, .notify, .read],
             value: nil,
             permissions: [.readable, .writeable]
         )
 
-        callStateCharacteristic = CBMutableCharacteristic(
+        let callState = CBMutableCharacteristic(
             type: Self.callStateCharacteristicUUID,
             properties: [.read, .notify],
             value: nil,
@@ -143,11 +144,10 @@ public class BLEServerManager: NSObject, ObservableObject {
         )
 
         let service = CBMutableService(type: Self.companionServiceUUID, primary: true)
-        service.characteristics = [
-            statusCharacteristic!,
-            quickReplyCharacteristic!,
-            callStateCharacteristic!
-        ]
+        service.characteristics = [status, bridge, callState]
+        statusCharacteristic = status
+        quickReplyCharacteristic = bridge
+        callStateCharacteristic = callState
 
         peripheralManager.add(service)
         serviceAdded = true
@@ -176,19 +176,18 @@ public class BLEServerManager: NSObject, ObservableObject {
 
         isFlushingQueue = true
 
-        while !outboundQueue.isEmpty {
-            let nextChunk = outboundQueue.first!
+        while let nextChunk = outboundQueue.first {
             let success = peripheralManager.updateValue(nextChunk, for: char, onSubscribedCentrals: nil)
             if success {
                 outboundQueue.removeFirst()
             } else {
-                // Buffer full — wait for peripheralManagerIsReady(toUpdateSubscribers:)
-                logger.debug("CoreBluetooth peripheral buffer full, waiting for ready event")
+                // CoreBluetooth resumes notifications through peripheralManagerIsReady.
                 isFlushingQueue = false
                 return
             }
         }
 
+        outboundQueue.removeAll()
         isFlushingQueue = false
     }
 
@@ -204,6 +203,19 @@ public class BLEServerManager: NSObject, ObservableObject {
                 if type == "ping" {
                     // Send ACK back
                     multiplexer.sendAck(channel: .pingControl, sequenceNumber: 0, payload: payload)
+                } else if type == "bridge_ping", let nonce = json["nonce"] as? Int64 {
+                    UIDevice.current.isBatteryMonitoringEnabled = true
+                    let battery = UIDevice.current.batteryLevel
+                    let status: [String: Any] = [
+                        "type": "bridge_pong", "nonce": nonce,
+                        "battery": battery >= 0 ? Int((battery * 100).rounded()) : -1
+                    ]
+                    if let data = try? JSONSerialization.data(withJSONObject: status) {
+                        for chunk in multiplexer.createChunks(channel: .pingControl, payload: data, maxChunkSize: currentWriteMtu()) {
+                            enqueueOutboundChunk(chunk)
+                        }
+                    }
+                    WeatherSyncService.shared.refreshIfDue()
                 }
             }
 
@@ -238,8 +250,12 @@ public class BLEServerManager: NSObject, ObservableObject {
             }
 
         case .binaryFile:
-            if let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any], json["cmd"] != nil {
-                FileTransferManager.shared.handleIncomingControlPacket(payload)
+            var actualPayload = payload
+            if payload.first == FileTransferManager.headerControlJson {
+                actualPayload = payload.dropFirst()
+            }
+            if let json = try? JSONSerialization.jsonObject(with: actualPayload) as? [String: Any], json["cmd"] != nil {
+                FileTransferManager.shared.handleIncomingControlPacket(actualPayload)
             } else {
                 // Peer completed sending a file — acknowledge receipt
                 let computedCrc = CRC32.checksum(data: payload)
@@ -657,8 +673,8 @@ public class BLEServerManager: NSObject, ObservableObject {
     }
 
     public func currentWriteMtu() -> Int {
-        if let central = subscribedCentrals.first {
-            return max(20, central.maximumUpdateValueLength)
+        if let capacity = subscribedCentrals.map(\.maximumUpdateValueLength).min() {
+            return min(512, max(20, capacity))
         }
         return max(20, negotiatedMTU)
     }
@@ -772,14 +788,28 @@ extension BLEServerManager: CBPeripheralManagerDelegate {
         logger.info("Peripheral state updated: \(peripheral.state.rawValue)")
 
         if peripheral.state == .poweredOn {
-            setupServices()
+            if serviceAdded {
+                if !peripheral.isAdvertising { startAdvertising() }
+            } else {
+                setupServices()
+            }
         } else {
             isAdvertising = false
+            subscribedCentrals.removeAll()
+            outboundQueue.removeAll()
+            isFlushingQueue = false
+            if peripheral.state == .poweredOff || peripheral.state == .resetting {
+                serviceAdded = false
+                statusCharacteristic = nil
+                quickReplyCharacteristic = nil
+                callStateCharacteristic = nil
+            }
         }
     }
 
     public func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
         if let error = error {
+            serviceAdded = false
             logger.error("Failed to add companion service: \(error.localizedDescription)")
             return
         }
@@ -799,31 +829,23 @@ extension BLEServerManager: CBPeripheralManagerDelegate {
     }
 
     public func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didSubscribeTo characteristic: CBCharacteristic) {
-        subscribedCentrals.insert(central)
-        let centralMtu = central.maximumUpdateValueLength
-        negotiatedMTU = centralMtu
-        logger.info("Central subscribed to \(characteristic.uuid). Central MTU: \(centralMtu)")
-
-        if characteristic.uuid == Self.quickReplyCharacteristicUUID || characteristic.uuid == Self.connectionStatusUUID {
-            // Clear any stale outbound queue from previous disconnected session
-            outboundQueue.removeAll()
-            isFlushingQueue = false
-
-            // Trigger auto-sync for contacts (delta hash check) and weather on watch connection
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                ContactsSyncManager.shared.syncContacts(force: false)
-                WeatherSyncService.shared.syncWeather(force: false)
-            }
-        }
+        guard characteristic.uuid == Self.quickReplyCharacteristicUUID else { return }
+        guard subscribedCentrals.insert(central).inserted else { return }
+        negotiatedMTU = currentWriteMtu()
+        FileTransferManager.shared.companionReconnected()
+        ContactsSyncManager.shared.syncContacts(force: false)
+        WeatherSyncService.shared.syncOnConnection()
+        MediaQoLManager.shared.pollAndPushMediaState(force: true)
     }
 
     public func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didUnsubscribeFrom characteristic: CBCharacteristic) {
+        guard characteristic.uuid == Self.quickReplyCharacteristicUUID else { return }
         subscribedCentrals.remove(central)
         logger.info("Central unsubscribed from \(characteristic.uuid)")
         if subscribedCentrals.isEmpty {
             outboundQueue.removeAll()
             isFlushingQueue = false
-            FileTransferManager.shared.cancelTransfer()
+            FileTransferManager.shared.companionDisconnected()
         }
     }
 
@@ -929,11 +951,23 @@ extension BLEServerManager: CBPeripheralManagerDelegate {
 
     public func peripheralManager(_ peripheral: CBPeripheralManager, willRestoreState dict: [String: Any]) {
         logger.info("Restoring consolidated peripheral manager state")
-        if let services = dict[CBPeripheralManagerRestoredStateServicesKey] as? [CBMutableService] {
-            serviceAdded = !services.isEmpty
+        if let services = dict[CBPeripheralManagerRestoredStateServicesKey] as? [CBMutableService],
+           let service = services.first(where: { $0.uuid == Self.companionServiceUUID }) {
+            let characteristics = service.characteristics?.compactMap { $0 as? CBMutableCharacteristic } ?? []
+            statusCharacteristic = characteristics.first { $0.uuid == Self.connectionStatusUUID }
+            quickReplyCharacteristic = characteristics.first { $0.uuid == Self.quickReplyCharacteristicUUID }
+            callStateCharacteristic = characteristics.first { $0.uuid == Self.callStateCharacteristicUUID }
+            subscribedCentrals = Set(quickReplyCharacteristic?.subscribedCentrals ?? [])
+            serviceAdded = true
+            negotiatedMTU = currentWriteMtu()
         }
-        if peripheral.isAdvertising {
-            isAdvertising = true
+        isAdvertising = peripheral.isAdvertising
+        if hasCompanionSubscriber {
+            DispatchQueue.main.async { [weak self] in
+                guard self?.hasCompanionSubscriber == true else { return }
+                WeatherSyncService.shared.syncOnConnection()
+                MediaQoLManager.shared.pollAndPushMediaState(force: true)
+            }
         }
     }
 }

@@ -32,41 +32,55 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x wearos-app/gradlew
 
-      - name: Build Release & Debug APKs
-        run: |
-          cd wearos-app
-          ./gradlew assembleRelease assembleDebug --no-daemon
+      - name: Build and test debug APK
+        working-directory: wearos-app
+        run: ./gradlew assembleDebug testDebugUnitTest --no-daemon
 
-      - name: Rename APK for Distribution
+      - name: Prepare distribution APKs
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          WEARBRIDGE_RELEASE_STORE_BASE64: ${{ secrets.WEARBRIDGE_RELEASE_STORE_BASE64 }}
+          WEARBRIDGE_RELEASE_STORE_PASSWORD: ${{ secrets.WEARBRIDGE_RELEASE_STORE_PASSWORD }}
+          WEARBRIDGE_RELEASE_KEY_ALIAS: ${{ secrets.WEARBRIDGE_RELEASE_KEY_ALIAS }}
+          WEARBRIDGE_RELEASE_KEY_PASSWORD: ${{ secrets.WEARBRIDGE_RELEASE_KEY_PASSWORD }}
         run: |
-          cp wearos-app/app/build/outputs/apk/release/app-release.apk WearBridge-WearOS-v2.0.0-release.apk
-          cp wearos-app/app/build/outputs/apk/debug/app-debug.apk WearBridge-WearOS-v2.0.0-debug.apk
-          ls -lh WearBridge-WearOS-v2.0.0-release.apk WearBridge-WearOS-v2.0.0-debug.apk
+          if [ -z "$WEARBRIDGE_RELEASE_STORE_BASE64" ]; then
+            echo "Release signing is unconfigured. Skipping distribution build."
+            exit 0
+          fi
+          export WEARBRIDGE_RELEASE_STORE="$(mktemp)"
+          trap 'rm -f "$WEARBRIDGE_RELEASE_STORE"' EXIT
+          printf '%s' "$WEARBRIDGE_RELEASE_STORE_BASE64" | base64 --decode > "$WEARBRIDGE_RELEASE_STORE"
+          test -n "$WEARBRIDGE_RELEASE_STORE_PASSWORD"
+          test -n "$WEARBRIDGE_RELEASE_KEY_ALIAS"
+          test -n "$WEARBRIDGE_RELEASE_KEY_PASSWORD"
+          (cd wearos-app && ./gradlew assembleRelease --no-daemon)
+          cp wearos-app/app/build/outputs/apk/release/app-release.apk WearBridge-WearOS-v2.1.0-release.apk
 
       - name: Upload Release APK Artifact
+        if: hashFiles('WearBridge-WearOS-v2.1.0-release.apk') != ''
         uses: actions/upload-artifact@v4
         with:
-          name: WearBridge-WearOS-v2.0.0-release
-          path: WearBridge-WearOS-v2.0.0-release.apk
+          name: WearBridge-WearOS-v2.1.0-release
+          path: WearBridge-WearOS-v2.1.0-release.apk
           if-no-files-found: error
           retention-days: 14
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: WearBridge-WearOS-v2.0.0-debug
-          path: WearBridge-WearOS-v2.0.0-debug.apk
+          name: WearBridge-WearOS-v2.1.0-debug
+          path: wearos-app/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
 
       - name: Publish APKs to Rolling GitHub Release
-        if: github.ref == 'refs/heads/main'
-        continue-on-error: true
+        if: github.ref == 'refs/heads/main' && hashFiles('WearBridge-WearOS-v2.1.0-release.apk') != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if gh release view latest >/dev/null 2>&1; then
-            gh release upload latest WearBridge-WearOS-v2.0.0-release.apk WearBridge-WearOS-v2.0.0-debug.apk --clobber
+            gh release upload latest WearBridge-WearOS-v2.1.0-release.apk --clobber
           else
-            gh release create latest WearBridge-WearOS-v2.0.0-release.apk WearBridge-WearOS-v2.0.0-debug.apk --title "WearBridge Latest Release" --notes "Automated build containing latest Wear OS APK and unsigned iOS IPA."
+            gh release create latest WearBridge-WearOS-v2.1.0-release.apk --title "WearBridge Latest Release" --notes "Signed Wear OS release APK."
           fi

@@ -28,6 +28,53 @@ public struct MediaQoLPayload: Codable, Equatable {
 }
 
 /**
+ * Full Media State Sync payload streamed over Channel 0x05 to guarantee
+ * instant, active playback tracking even when AMS is unbonded or delayed.
+ */
+public struct MediaStateSyncPayload: Codable {
+    public let cmd: String
+    public let title: String
+    public let artist: String
+    public let album: String
+    public let isPlaying: Bool
+    public let playbackRate: Float
+    public let elapsedSeconds: Double
+    public let durationSeconds: Double
+    public let volume: Float
+    public let audioRouteName: String
+    public let artworkBase64: String
+    public let trackKey: String
+
+    public init(
+        cmd: String = "MEDIA_STATE",
+        title: String,
+        artist: String,
+        album: String,
+        isPlaying: Bool,
+        playbackRate: Float,
+        elapsedSeconds: Double,
+        durationSeconds: Double,
+        volume: Float,
+        audioRouteName: String,
+        artworkBase64: String,
+        trackKey: String
+    ) {
+        self.cmd = cmd
+        self.title = title
+        self.artist = artist
+        self.album = album
+        self.isPlaying = isPlaying
+        self.playbackRate = playbackRate
+        self.elapsedSeconds = elapsedSeconds
+        self.durationSeconds = durationSeconds
+        self.volume = volume
+        self.audioRouteName = audioRouteName
+        self.artworkBase64 = artworkBase64
+        self.trackKey = trackKey
+    }
+}
+
+/**
  * Inbound command received from Wear OS over Channel 0x05.
  * Format: {"cmd": "FETCH_ART", "title": "...", "artist": "...", "album": "..."}
  */
@@ -90,40 +137,140 @@ public class MediaQoLManager: ObservableObject {
     @Published public var isResolvingArt: Bool = false
     @Published public var activeMediaItem: ActiveMediaItem? = nil
 
+    private var pollingTimer: Timer?
+    private var lastSentStateHash: String = ""
+    private var lastSentAt = Date.distantPast
+
     private init() {
         setupNowPlayingObservers()
+        MPMusicPlayerController.systemMusicPlayer.beginGeneratingPlaybackNotifications()
+        startPeriodicPolling()
+    }
+
+    deinit {
+        pollingTimer?.invalidate()
+        MPMusicPlayerController.systemMusicPlayer.endGeneratingPlaybackNotifications()
     }
 
     private func setupNowPlayingObservers() {
-        // Observe local music player changes if permitted
+        // Observe local music player changes
         NotificationCenter.default.publisher(for: .MPMusicPlayerControllerNowPlayingItemDidChange)
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.handleLocalNowPlayingChange()
             }
             .store(in: &cancellables)
 
+        NotificationCenter.default.publisher(for: .MPMusicPlayerControllerPlaybackStateDidChange)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.pollAndPushMediaState()
+            }
+            .store(in: &cancellables)
+
         // Observe audio route changes (e.g. AirPods connected/disconnected)
         NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.handleAudioRouteChange()
             }
             .store(in: &cancellables)
     }
 
-    private func handleLocalNowPlayingChange() {
-        guard let item = MPMusicPlayerController.systemMusicPlayer.nowPlayingItem else { return }
-        let title = item.title ?? ""
-        let artist = item.artist ?? ""
-        guard !title.isEmpty || !artist.isEmpty else { return }
+    private func startPeriodicPolling() {
+        pollingTimer?.invalidate()
+        pollingTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            self?.pollAndPushMediaState()
+        }
+    }
 
+    /**
+     * Polls MPMusicPlayerController.systemMusicPlayer and pushes a live MediaStateSyncPayload
+     * over Channel 0x05 whenever playing or when metadata changes.
+     */
+    public func pollAndPushMediaState(force: Bool = false) {
+        guard BLEServerManager.shared.hasCompanionSubscriber else { return }
+        let player = MPMusicPlayerController.systemMusicPlayer
+        let isPlaying = player.playbackState == .playing
+        let item = player.nowPlayingItem
+        guard item != nil || isPlaying || !lastSentStateHash.isEmpty else { return }
+        let title = item?.title ?? (isPlaying ? "Audio Playing" : "")
+        let artist = item?.artist ?? ""
+        let album = item?.albumTitle ?? ""
+        let duration = item?.playbackDuration ?? 0
+        let elapsed = player.currentPlaybackTime
+        let volume = AVAudioSession.sharedInstance().outputVolume
+        let route = getCurrentAudioRoute()
+        let state = [title, artist, album, String(isPlaying), String(volume), route].joined(separator: "|")
+        let now = Date()
+        guard force || state != lastSentStateHash ||
+            (isPlaying && now.timeIntervalSince(lastSentAt) >= 15) else { return }
+        lastSentStateHash = state
+        lastSentAt = now
+        pushMediaStatePayload(
+            title: title,
+            artist: artist,
+            album: album,
+            isPlaying: isPlaying,
+            playbackRate: isPlaying ? Float(player.currentPlaybackRate) : 0,
+            elapsedSeconds: elapsed.isFinite ? max(0, elapsed) : 0,
+            durationSeconds: duration.isFinite ? max(0, duration) : 0,
+            volume: volume,
+            audioRouteName: route,
+            artworkBase64: ""
+        )
+    }
+
+    private func pushMediaStatePayload(
+        title: String,
+        artist: String,
+        album: String,
+        isPlaying: Bool,
+        playbackRate: Float,
+        elapsedSeconds: Double,
+        durationSeconds: Double,
+        volume: Float,
+        audioRouteName: String,
+        artworkBase64: String
+    ) {
         let trackKey = "\(artist)_\(title)"
-        if trackKey == lastSentTrackKey {
-            return
-        }
+        let payload = MediaStateSyncPayload(
+            cmd: "MEDIA_STATE",
+            title: title,
+            artist: artist,
+            album: album,
+            isPlaying: isPlaying,
+            playbackRate: playbackRate,
+            elapsedSeconds: elapsedSeconds,
+            durationSeconds: durationSeconds,
+            volume: volume,
+            audioRouteName: audioRouteName,
+            artworkBase64: artworkBase64,
+            trackKey: trackKey
+        )
 
-        Task {
-            await self.resolveAndPushMediaQoL(title: title, artist: artist, album: item.albumTitle, duration: item.playbackDuration)
+        do {
+            let data = try JSONEncoder().encode(payload)
+            BLEServerManager.shared.sendMediaQoLPayload(data)
+            DispatchQueue.main.async {
+                self.lastSentTrackKey = trackKey
+                self.lastAudioRouteName = audioRouteName
+                self.activeMediaItem = ActiveMediaItem(
+                    title: title,
+                    artist: artist,
+                    album: album,
+                    audioRoute: audioRouteName,
+                    artworkBase64: artworkBase64.isEmpty ? nil : artworkBase64
+                )
+            }
+            logger.debug("Pushed MediaStateSyncPayload over Channel 0x05: '\(title)' by '\(artist)' (isPlaying=\(isPlaying))")
+        } catch {
+            logger.error("Failed to encode MediaStateSyncPayload: \(error.localizedDescription)")
         }
+    }
+
+    private func handleLocalNowPlayingChange() {
+        pollAndPushMediaState()
     }
 
     private func handleAudioRouteChange() {
@@ -132,10 +279,23 @@ public class MediaQoLManager: ObservableObject {
             self.lastAudioRouteName = currentRoute
         }
         logger.info("Audio route changed to: \(currentRoute)")
+        pollAndPushMediaState()
     }
 
     /// Handles incoming reassembled payload on Channel 0x05 from Wear OS
     public func handleIncomingRequest(data: Data) {
+        // 1. Check for MEDIA_CONTROL command from Watch
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let cmd = json["cmd"] as? String {
+            if cmd == "MEDIA_CONTROL" {
+                let action = json["action"] as? String ?? ""
+                logger.info("Received MEDIA_CONTROL action from Watch: \(action)")
+                handleMediaControlAction(action)
+                return
+            }
+        }
+
+        // 2. Check for legacy FETCH_ART command
         do {
             let decoder = JSONDecoder()
             let command = try decoder.decode(MediaFetchArtCommand.self, from: data)
@@ -156,6 +316,38 @@ public class MediaQoLManager: ObservableObject {
             }
         } catch {
             logger.error("Failed to parse Channel 0x05 request JSON: \(error.localizedDescription)")
+        }
+    }
+
+    private func handleMediaControlAction(_ action: String) {
+        DispatchQueue.main.async {
+            let player = MPMusicPlayerController.systemMusicPlayer
+            switch action {
+            case "TOGGLE_PLAY_PAUSE":
+                if player.playbackState == .playing {
+                    player.pause()
+                } else {
+                    player.play()
+                }
+            case "PLAY":
+                player.play()
+            case "PAUSE":
+                player.pause()
+            case "NEXT":
+                player.skipToNextItem()
+            case "PREV":
+                player.skipToPreviousItem()
+            case "VOL_UP", "VOL_DOWN":
+                // Handled natively by iOS volume hardware
+                break
+            default:
+                self.logger.warning("Unknown media control action: \(action)")
+            }
+
+            // Immediately poll and push updated state
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                self?.pollAndPushMediaState()
+            }
         }
     }
 

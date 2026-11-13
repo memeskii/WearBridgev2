@@ -66,6 +66,8 @@ class AncsService : Service() {
         private const val MAX_ACTIVE_NOTIFICATIONS = 20 // Android limit is 25; keep headroom
 
         /** Shared connection state observable by the ViewModel */
+        private val _companionConnected = MutableStateFlow(false)
+        val companionConnected = _companionConnected.asStateFlow()
         private val _sharedConnectionState = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
         val sharedConnectionState: StateFlow<ConnectionState> = _sharedConnectionState.asStateFlow()
 
@@ -175,6 +177,10 @@ class AncsService : Service() {
             }
         }
 
+        scope.launch {
+            connectionManager.companionConnected.collect { _companionConnected.value = it }
+        }
+
         // Update service notification and shared state based on connection state
         scope.launch {
             connectionManager.connectionState.collectLatest { state ->
@@ -274,6 +280,7 @@ class AncsService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        _companionConnected.value = false
         if (instance === this) {
             instance = null
         }

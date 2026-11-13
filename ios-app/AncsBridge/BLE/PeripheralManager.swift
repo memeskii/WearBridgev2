@@ -14,7 +14,8 @@ class PeripheralManager: NSObject, ObservableObject {
     // Single consolidated GATT peripheral manager
     let serverManager = BLEServerManager.shared
 
-    private var centralManager: CBCentralManager!
+    private var centralManager: CBCentralManager?
+    private var restoredWatches: [UUID: CBPeripheral] = [:]
     private var cancellables = Set<AnyCancellable>()
 
     @Published var discoveredWatches: [DiscoveredWatch] = []
@@ -58,7 +59,8 @@ class PeripheralManager: NSObject, ObservableObject {
             delegate: self,
             queue: nil,
             options: [
-                CBCentralManagerOptionShowPowerAlertKey: false
+                CBCentralManagerOptionShowPowerAlertKey: false,
+                CBCentralManagerOptionRestoreIdentifierKey: "com.wearos.ancsbridge.central"
             ]
         )
 
@@ -99,9 +101,9 @@ class PeripheralManager: NSObject, ObservableObject {
     // MARK: - Connected Watch Discovery
 
     func refreshConnectedWatches() {
-        guard centralManager.state == .poweredOn else { return }
+        guard let centralManager, centralManager.state == .poweredOn else { return }
 
-        var found: [UUID: CBPeripheral] = [:]
+        var found = restoredWatches.filter { $0.value.state == .connected }
 
         for serviceUUID in Self.probeServiceUUIDs {
             let peripherals = centralManager.retrieveConnectedPeripherals(withServices: [serviceUUID])
@@ -110,6 +112,8 @@ class PeripheralManager: NSObject, ObservableObject {
             }
         }
 
+        let persisted = loadPersistedWatches()
+        let savedIds = Set(persisted.map(\.id))
         var connectedWatchIds = Set<String>()
         var result: [DiscoveredWatch] = []
 
@@ -117,12 +121,13 @@ class PeripheralManager: NSObject, ObservableObject {
             guard let name = peripheral.name, !name.isEmpty else { continue }
             let lower = name.lowercased()
             let isWatch = Self.watchNamePatterns.contains { lower.contains($0) }
-            let savedWatches = loadPersistedWatches()
-            let wasPreviouslySeen = savedWatches.contains { $0.id == peripheral.identifier.uuidString }
+            let wasPreviouslySeen = savedIds.contains(peripheral.identifier.uuidString)
 
             guard isWatch || wasPreviouslySeen else { continue }
 
-            savePersistedWatch(PersistedWatch(id: peripheral.identifier.uuidString, name: name))
+            if !wasPreviouslySeen {
+                savePersistedWatch(PersistedWatch(id: peripheral.identifier.uuidString, name: name))
+            }
             connectedWatchIds.insert(peripheral.identifier.uuidString)
 
             peripheral.delegate = self
@@ -130,7 +135,6 @@ class PeripheralManager: NSObject, ObservableObject {
             let mtu = peripheral.maximumWriteValueLength(for: .withoutResponse)
             if mtu > 0 {
                 self.mtuSize = mtu
-                self.serverManager.negotiatedMTU = mtu
             }
 
             result.append(DiscoveredWatch(
@@ -141,7 +145,7 @@ class PeripheralManager: NSObject, ObservableObject {
             ))
         }
 
-        for saved in loadPersistedWatches() {
+        for saved in persisted {
             if !connectedWatchIds.contains(saved.id), let uuid = UUID(uuidString: saved.id) {
                 result.append(DiscoveredWatch(
                     id: uuid,
@@ -199,6 +203,13 @@ class PeripheralManager: NSObject, ObservableObject {
 
 // MARK: - CBCentralManagerDelegate
 extension PeripheralManager: CBCentralManagerDelegate {
+
+    func centralManager(_ central: CBCentralManager, willRestoreState state: [String: Any]) {
+        for peripheral in state[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral] ?? [] {
+            peripheral.delegate = self
+            restoredWatches[peripheral.identifier] = peripheral
+        }
+    }
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         bluetoothState = central.state

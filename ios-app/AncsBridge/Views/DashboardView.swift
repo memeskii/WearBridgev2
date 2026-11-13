@@ -6,6 +6,11 @@ public struct DashboardView: View {
     @ObservedObject private var weatherService = WeatherSyncService.shared
     @ObservedObject private var healthManager = HealthTelemetryManager.shared
 
+    // Quick Action States
+    @State private var isPinging = false
+    @State private var pingResult: String?
+    @State private var isSyncingAll = false
+    @State private var syncResult: String?
     @State private var isPullingTelemetry = false
     @State private var telemetryMessage: String?
 
@@ -14,36 +19,27 @@ public struct DashboardView: View {
     public var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 16) {
-                    // 1. Connection Status Pill
-                    connectionStatusPill
+                VStack(spacing: 18) {
+                    // 1. Hero Interactive Watch Status Card (Galaxy Watch Bezel + Battery Ring + Quick Actions)
+                    heroWatchStatusCard
 
-                    // 1b. Active App Bridges Strip
-                    activeAppBridgesSection
+                    // 2. Active App Bridges Strip
+                    activeAppBridgesStrip
 
-                    // 2. Synced Weather Summary Card
-                    weatherSummaryCard
+                    // 3. Weather Bento Card (Sky Gradient + 12h Forecast Pills)
+                    weatherBentoCard
 
-                    // 3. Health Telemetry Section Header with Pull Action
-                    telemetryHeader
+                    // 4. Health Telemetry Header
+                    healthTelemetryHeader
 
-                    // 4. Sleep Stages SwiftCharts Breakdown
-                    sleepStagesChartCard
-
-                    // 5. SpO2 Trend SwiftCharts Card
-                    spo2TrendChartCard
-
-                    // 6. Stress Score & HRV Gauge Card
-                    stressScoreCard
-
-                    // 7. Active vs Total Calories Burned Card
-                    caloriesBurnedCard
+                    // 5. 2x2 Bento Grid + SwiftCharts Health Cards
+                    healthBentoGrid
                 }
-                .padding(.horizontal)
-                .padding(.vertical, 12)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
             }
             .navigationTitle("Dashboard")
-            .background(Color(.systemGroupedBackground))
+            .background(WearBridgeTheme.obsidianBackground.ignoresSafeArea())
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
@@ -51,9 +47,11 @@ public struct DashboardView: View {
                     } label: {
                         if isPullingTelemetry {
                             ProgressView()
+                                .tint(WearBridgeTheme.accentTeal)
                                 .scaleEffect(0.8)
                         } else {
                             Image(systemName: "arrow.triangle.2.circlepath")
+                                .foregroundColor(WearBridgeTheme.accentTeal)
                         }
                     }
                     .disabled(isPullingTelemetry)
@@ -62,86 +60,214 @@ public struct DashboardView: View {
         }
     }
 
-    // MARK: - 1. Connection Status Pill
-    private var connectionStatusPill: some View {
+    // MARK: - 1. Hero Interactive Watch Status Card
+    private var heroWatchStatusCard: some View {
         let connectedWatches = viewModel.peripheralManager.discoveredWatches.filter { $0.isConnected }
         let isConnected = !connectedWatches.isEmpty
-        let watchName = connectedWatches.first?.name ?? "Wear OS Watch"
-        let battery = viewModel.watchBatteryLevel
+        let watchName = connectedWatches.first?.name ?? (isConnected ? "Galaxy Watch" : "Wear OS Watch")
+        let battery = viewModel.watchBatteryLevel ?? 84
         let isCharging = viewModel.isWatchCharging
-        let rssi = connectedWatches.first?.rssi ?? -70
+        let rssi = viewModel.rssiValue ?? connectedWatches.first?.rssi ?? -68
 
-        return HStack(spacing: 14) {
-            ZStack {
-                Circle()
-                    .fill(isConnected ? Color.green.opacity(0.15) : Color.orange.opacity(0.15))
-                    .frame(width: 44, height: 44)
-                Image(systemName: isConnected ? "applewatch.radiowaves.left.and.right" : "applewatch.slash")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundColor(isConnected ? .green : .orange)
-            }
-
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(isConnected ? watchName : "Searching for Watch...")
-                        .font(.system(.subheadline, design: .rounded))
-                        .fontWeight(.bold)
+        return VStack(spacing: 16) {
+            HStack(spacing: 18) {
+                // Galaxy Watch Bezel Illustration + Battery Ring
+                ZStack {
+                    // Outer Bezel Ring with Ticks
                     Circle()
-                        .fill(isConnected ? Color.green : Color.orange)
-                        .frame(width: 8, height: 8)
-                }
+                        .strokeBorder(
+                            AngularGradient(
+                                colors: [
+                                    Color.white.opacity(0.25),
+                                    Color.white.opacity(0.08),
+                                    Color.white.opacity(0.20),
+                                    Color.white.opacity(0.05),
+                                    Color.white.opacity(0.25)
+                                ],
+                                center: .center
+                            ),
+                            lineWidth: 7
+                        )
+                        .frame(width: 98, height: 98)
 
-                HStack(spacing: 8) {
-                    if let batt = battery {
-                        HStack(spacing: 3) {
-                            Image(systemName: isCharging ? "battery.100.bolt" : "battery.75")
-                                .foregroundColor(isCharging ? .green : .primary)
-                            Text("\(batt)%")
-                        }
-                        .font(.caption2)
+                    // Bezel Rotary Ticks
+                    ForEach(0..<12) { i in
+                        Rectangle()
+                            .fill(i % 3 == 0 ? WearBridgeTheme.accentCyan.opacity(0.8) : Color.white.opacity(0.25))
+                            .frame(width: i % 3 == 0 ? 2 : 1.2, height: i % 3 == 0 ? 6 : 4)
+                            .offset(y: -44)
+                            .rotationEffect(.degrees(Double(i) * 30))
                     }
 
-                    if isConnected {
-                        HStack(spacing: 3) {
+                    // Inner Display Shadow Circle
+                    Circle()
+                        .fill(Color(red: 0.04, green: 0.05, blue: 0.07))
+                        .frame(width: 82, height: 82)
+
+                    // Battery Progress Ring
+                    Circle()
+                        .stroke(Color.white.opacity(0.08), lineWidth: 4)
+                        .frame(width: 74, height: 74)
+
+                    Circle()
+                        .trim(from: 0.0, to: Double(battery) / 100.0)
+                        .stroke(
+                            AngularGradient(
+                                colors: isCharging ?
+                                    [WearBridgeTheme.accentGreen, WearBridgeTheme.accentTeal] :
+                                    (battery > 20 ? [WearBridgeTheme.accentCyan, WearBridgeTheme.accentTeal] : [Color.orange, Color.red]),
+                                center: .center
+                            ),
+                            style: StrokeStyle(lineWidth: 4, lineCap: .round)
+                        )
+                        .frame(width: 74, height: 74)
+                        .rotationEffect(.degrees(-90))
+
+                    // Center Content (Battery % & Charging / Online Glyph)
+                    VStack(spacing: 2) {
+                        Image(systemName: isCharging ? "bolt.fill" : (isConnected ? "applewatch.radiowaves.left.and.right" : "applewatch.slash"))
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundColor(isCharging ? WearBridgeTheme.accentGreen : (isConnected ? WearBridgeTheme.accentTeal : Color.orange))
+
+                        HStack(spacing: 1) {
+                            Text("\(battery)")
+                                .font(.system(size: 15, weight: .heavy, design: .rounded))
+                                .foregroundColor(WearBridgeTheme.textPrimary)
+                            Text("%")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(WearBridgeTheme.textSecondary)
+                        }
+                    }
+                }
+                .frame(width: 100, height: 100)
+
+                // Watch Details & Link State
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Text(watchName)
+                            .font(.system(size: 17, weight: .bold, design: .rounded))
+                            .foregroundColor(WearBridgeTheme.textPrimary)
+                            .lineLimit(1)
+
+                        Circle()
+                            .fill(isConnected ? WearBridgeTheme.accentGreen : Color.orange)
+                            .frame(width: 8, height: 8)
+                            .shadow(color: (isConnected ? WearBridgeTheme.accentGreen : Color.orange).opacity(0.6), radius: 4)
+                    }
+
+                    // RSSI Pill + Protocol Badge
+                    HStack(spacing: 8) {
+                        // RSSI Pill
+                        HStack(spacing: 4) {
                             Image(systemName: "antenna.radiowaves.left.and.right")
+                                .font(.system(size: 9))
                             Text("\(rssi) dBm")
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
                         }
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(rssiColor(rssi).opacity(0.18))
+                        .foregroundColor(rssiColor(rssi))
+                        .cornerRadius(6)
+
+                        // Multiplexer Pill
+                        Text("BLE 0x01-0x07")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(WearBridgeTheme.accentCyan.opacity(0.15))
+                            .foregroundColor(WearBridgeTheme.accentCyan)
+                            .cornerRadius(6)
                     }
 
-                    Text("BLE 0x01-0x07")
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(Color.blue.opacity(0.15))
-                        .foregroundColor(.blue)
-                        .cornerRadius(3)
+                    // Status Text
+                    Text(isConnected ? "GATT Linked • All Channels Operational" : "Disconnected • Scanning for Watch...")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(WearBridgeTheme.textSecondary)
+                        .lineLimit(1)
                 }
+
+                Spacer()
             }
 
-            Spacer()
+            Divider()
+                .background(WearBridgeTheme.strokeSubtle)
 
-            if isConnected {
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text("ONLINE")
-                        .font(.system(size: 10, weight: .heavy))
-                        .foregroundColor(.green)
-                    Text("Auto-Syncing")
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
+            // Quick-Action Pills: "Ping Watch", "Sync All", "Pull Health"
+            HStack(spacing: 10) {
+                // Action 1: Ping Watch
+                quickActionPill(
+                    title: isPinging ? "Pinging..." : (pingResult ?? "Ping Watch"),
+                    icon: "stopwatch.fill",
+                    color: WearBridgeTheme.accentTeal,
+                    isLoading: isPinging
+                ) {
+                    triggerPing()
+                }
+
+                // Action 2: Sync All
+                quickActionPill(
+                    title: isSyncingAll ? "Syncing..." : (syncResult ?? "Sync All"),
+                    icon: "arrow.triangle.2.circlepath",
+                    color: WearBridgeTheme.accentCyan,
+                    isLoading: isSyncingAll
+                ) {
+                    triggerSyncAll()
+                }
+
+                // Action 3: Pull Health
+                quickActionPill(
+                    title: isPullingTelemetry ? "Pulling..." : "Pull Health",
+                    icon: "heart.fill",
+                    color: WearBridgeTheme.accentPink,
+                    isLoading: isPullingTelemetry
+                ) {
+                    pullTelemetry()
                 }
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(Color(.secondarySystemGroupedBackground))
-        .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.04), radius: 6, x: 0, y: 3)
+        .glassCard(cornerRadius: 22, padding: 18)
     }
 
-    // MARK: - 1b. Active App Bridges Strip
-    private var activeAppBridgesSection: some View {
+    private func quickActionPill(
+        title: String,
+        icon: String,
+        color: Color,
+        isLoading: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                if isLoading {
+                    ProgressView()
+                        .tint(color)
+                        .scaleEffect(0.7)
+                } else {
+                    Image(systemName: icon)
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(color)
+                }
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundColor(WearBridgeTheme.textPrimary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .padding(.horizontal, 6)
+            .background(color.opacity(0.12))
+            .cornerRadius(10)
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(color.opacity(0.35), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(isLoading)
+    }
+
+    // MARK: - 2. Active App Bridges Strip
+    private var activeAppBridgesStrip: some View {
         let highlightBundles: [String] = [
             AppBrandRegistry.bundleTikTokGlobal,
             AppBrandRegistry.bundleWhatsApp,
@@ -153,137 +279,191 @@ public struct DashboardView: View {
             AppBrandRegistry.bundlePhone
         ]
 
-        return VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: 9) {
             HStack {
                 Label("ACTIVE APP BRIDGES", systemImage: "app.badge.checkmark.fill")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundColor(.secondary)
+                    .font(.system(size: 10, weight: .heavy, design: .monospaced))
+                    .foregroundColor(WearBridgeTheme.textTertiary)
                 Spacer()
                 Text("ANCS + CH 0x06")
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .padding(.horizontal, 5)
+                    .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(Color.green.opacity(0.12))
-                    .foregroundColor(.green)
+                    .background(WearBridgeTheme.accentGreen.opacity(0.15))
+                    .foregroundColor(WearBridgeTheme.accentGreen)
                     .cornerRadius(4)
             }
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
                     ForEach(highlightBundles, id: \.self) { bundleId in
                         let brand = AppBrandRegistry.resolve(bundleId)
                         HStack(spacing: 6) {
                             Image(systemName: brand.sfSymbol)
-                                .font(.system(size: 12, weight: .semibold))
+                                .font(.system(size: 11, weight: .bold))
                                 .foregroundColor(brand.primaryColor)
                             Text(brand.displayName)
-                                .font(.system(size: 11, weight: .medium, design: .rounded))
-                                .foregroundColor(.primary)
+                                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                .foregroundColor(WearBridgeTheme.textPrimary)
                         }
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .background(Color(.secondarySystemGroupedBackground))
+                        .background(WearBridgeTheme.cardSurface)
                         .cornerRadius(12)
                         .overlay(
                             RoundedRectangle(cornerRadius: 12)
-                                .stroke(brand.primaryColor.opacity(0.25), lineWidth: 1)
+                                .stroke(brand.primaryColor.opacity(0.30), lineWidth: 1)
                         )
                     }
                 }
             }
         }
+        .glassCard(cornerRadius: 18, padding: 14)
     }
 
-    // MARK: - 2. Synced Weather Summary Card
-    private var weatherSummaryCard: some View {
+    // MARK: - 3. Weather Bento Card
+    private var weatherBentoCard: some View {
         let weather = weatherService.lastWeatherData
+        let currentTemp = weather?.temp ?? 21.0
+        let high = weather?.high ?? 24.0
+        let low = weather?.low ?? 15.0
+        let cityName = weather?.cityName ?? "Cupertino"
+        let code = weather?.weatherCode ?? 1
+        let hourly = weather?.hourly ?? []
 
-        return VStack(alignment: .leading, spacing: 12) {
+        return VStack(alignment: .leading, spacing: 14) {
+            // Header Row: City, Condition, Temp
             HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Label("SYNCED WEATHER (0x03)", systemImage: "cloud.sun.fill")
-                        .font(.caption2)
-                        .fontWeight(.bold)
-                        .foregroundColor(.blue)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "cloud.sun.fill")
+                            .foregroundColor(WearBridgeTheme.accentCyan)
+                        Text("WEATHER BRIDGE (0x03)")
+                            .font(.system(size: 10, weight: .heavy, design: .monospaced))
+                            .foregroundColor(WearBridgeTheme.accentCyan)
+                    }
 
-                    Text(weather?.cityName ?? "Cupertino")
-                        .font(.title2)
-                        .bold()
+                    Text(cityName)
+                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .foregroundColor(WearBridgeTheme.textPrimary)
 
-                    Text(weatherConditionText(code: weather?.weatherCode ?? 1))
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+                    Text(weatherConditionText(code: code))
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(WearBridgeTheme.textSecondary)
                 }
 
                 Spacer()
 
                 HStack(alignment: .top, spacing: 2) {
-                    Text(String(format: "%.0f", weather?.temp ?? 21.0))
-                        .font(.system(size: 42, weight: .thin, design: .rounded))
+                    Text(String(format: "%.0f", currentTemp))
+                        .font(.system(size: 44, weight: .light, design: .rounded))
+                        .foregroundColor(WearBridgeTheme.textPrimary)
                     Text("°")
-                        .font(.title)
-                        .foregroundColor(.secondary)
+                        .font(.system(size: 26, weight: .light))
+                        .foregroundColor(WearBridgeTheme.accentCyan)
                 }
             }
 
-            if let w = weather, !w.hourly.isEmpty {
-                Divider()
+            // 12-Hour Forecast Pills Strip
+            if !hourly.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 14) {
-                        ForEach(Array(w.hourly.prefix(6).enumerated()), id: \.offset) { _, hour in
-                            VStack(spacing: 4) {
+                    HStack(spacing: 10) {
+                        ForEach(Array(hourly.prefix(12).enumerated()), id: \.offset) { _, hour in
+                            VStack(spacing: 5) {
                                 Text(formatHour(timestamp: hour.time))
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.secondary)
+                                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                    .foregroundColor(WearBridgeTheme.textSecondary)
+
                                 Image(systemName: weatherSymbol(code: hour.code, isDay: 1))
-                                    .font(.caption)
-                                    .foregroundColor(.blue)
+                                    .font(.system(size: 15))
+                                    .foregroundColor(WearBridgeTheme.accentOrange)
+
                                 Text(String(format: "%.0f°", hour.temp))
-                                    .font(.caption2)
-                                    .bold()
+                                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                                    .foregroundColor(WearBridgeTheme.textPrimary)
                             }
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 10)
+                            .background(WearBridgeTheme.cardSurface.opacity(0.85))
+                            .cornerRadius(12)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(WearBridgeTheme.strokeSubtle, lineWidth: 1)
+                            )
                         }
                     }
                 }
             }
 
+            // Footer
             HStack {
-                Text(String(format: "H: %.0f°  L: %.0f°", weather?.high ?? 24.0, weather?.low ?? 15.0))
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+                Text(String(format: "High: %.0f°  •  Low: %.0f°", high, low))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(WearBridgeTheme.textSecondary)
+
                 Spacer()
-                Text("Synced via Channel 0x03")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+
+                Text("Channel 0x03 Synced")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundColor(WearBridgeTheme.accentCyan)
             }
         }
-        .padding()
-        .background(Color(.secondarySystemGroupedBackground))
-        .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.04), radius: 6, x: 0, y: 3)
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(WearBridgeTheme.weatherGradientDay)
+                .background(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(WearBridgeTheme.cardBackground.opacity(0.85))
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(WearBridgeTheme.accentCyan.opacity(0.25), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.35), radius: 14, x: 0, y: 7)
     }
 
-    // MARK: - 3. Telemetry Header
-    private var telemetryHeader: some View {
+    // MARK: - 4. Health Telemetry Header
+    private var healthTelemetryHeader: some View {
         HStack {
-            Text("HEALTH TELEMETRY")
-                .font(.caption)
-                .fontWeight(.bold)
-                .foregroundColor(.secondary)
+            Label("HEALTH TELEMETRY (0x04)", systemImage: "heart.text.square.fill")
+                .font(.system(size: 10, weight: .heavy, design: .monospaced))
+                .foregroundColor(WearBridgeTheme.textTertiary)
+
             Spacer()
+
             if let msg = telemetryMessage {
                 Text(msg)
-                    .font(.caption2)
-                    .foregroundColor(.blue)
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundColor(WearBridgeTheme.accentTeal)
             }
         }
         .padding(.horizontal, 4)
         .padding(.top, 4)
     }
 
-    // MARK: - 4. Sleep Stages SwiftCharts Breakdown
-    private var sleepStagesChartCard: some View {
+    // MARK: - 5. 2x2 Bento Grid + SwiftCharts Health Cards
+    private var healthBentoGrid: some View {
         let telemetry = healthManager.lastTelemetry
+
+        return LazyVGrid(columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)], spacing: 14) {
+            // Card 1: Sleep Stages SwiftCharts Breakdown
+            sleepBentoCard(telemetry)
+
+            // Card 2: Stress & HRV Autonomic Gauge
+            stressBentoCard(telemetry)
+
+            // Card 3: Blood Oxygen (SpO2 Trend SwiftChart)
+            spo2BentoCard(telemetry)
+
+            // Card 4: Daily Activity Calories Burned
+            caloriesBentoCard(telemetry)
+        }
+    }
+
+    // Card 1: Sleep Stages
+    private func sleepBentoCard(_ telemetry: HealthTelemetryPayload?) -> some View {
         let deep = telemetry?.sleep.deepMinutes ?? 115
         let rem = telemetry?.sleep.remMinutes ?? 90
         let light = telemetry?.sleep.lightMinutes ?? 210
@@ -299,79 +479,154 @@ public struct DashboardView: View {
         }
 
         let stages = [
-            SleepStageItem(stage: "Deep", minutes: deep, color: .indigo),
-            SleepStageItem(stage: "REM", minutes: rem, color: .purple),
-            SleepStageItem(stage: "Light", minutes: light, color: .blue),
-            SleepStageItem(stage: "Awake", minutes: awake, color: .orange)
+            SleepStageItem(stage: "Deep", minutes: deep, color: WearBridgeTheme.accentPurple),
+            SleepStageItem(stage: "REM", minutes: rem, color: WearBridgeTheme.accentCyan),
+            SleepStageItem(stage: "Light", minutes: light, color: WearBridgeTheme.accentTeal),
+            SleepStageItem(stage: "Awake", minutes: awake, color: WearBridgeTheme.accentOrange)
         ]
 
-        return VStack(alignment: .leading, spacing: 12) {
+        return VStack(alignment: .leading, spacing: 10) {
             HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Label("Sleep Architecture", systemImage: "bed.double.fill")
-                        .font(.footnote)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.indigo)
-                    Text("\(totalMin / 60)h \(totalMin % 60)m")
-                        .font(.title3)
-                        .bold()
-                }
+                Label("Sleep", systemImage: "bed.double.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(WearBridgeTheme.accentPurple)
 
                 Spacer()
 
+                // Sleep Score Mini Ring
                 ZStack {
                     Circle()
-                        .stroke(Color.indigo.opacity(0.2), lineWidth: 4)
-                        .frame(width: 44, height: 44)
+                        .stroke(WearBridgeTheme.accentPurple.opacity(0.2), lineWidth: 3)
+                        .frame(width: 28, height: 28)
                     Circle()
                         .trim(from: 0, to: Double(score) / 100.0)
-                        .stroke(Color.indigo, style: StrokeStyle(lineWidth: 4, lineCap: .round))
-                        .frame(width: 44, height: 44)
+                        .stroke(WearBridgeTheme.accentPurple, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .frame(width: 28, height: 28)
                         .rotationEffect(.degrees(-90))
                     Text("\(score)")
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
-                        .foregroundColor(.indigo)
+                        .font(.system(size: 9, weight: .heavy, design: .rounded))
+                        .foregroundColor(WearBridgeTheme.accentPurple)
                 }
             }
 
-            // SwiftChart: Horizontal Stacked Bar
+            VStack(alignment: .leading, spacing: 1) {
+                Text("\(totalMin / 60)h \(totalMin % 60)m")
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .foregroundColor(WearBridgeTheme.textPrimary)
+                Text("Architecture")
+                    .font(.system(size: 10))
+                    .foregroundColor(WearBridgeTheme.textSecondary)
+            }
+
+            // SwiftChart: Stacked Bar
             Chart(stages) { item in
                 BarMark(
                     x: .value("Minutes", item.minutes)
                 )
                 .foregroundStyle(item.color)
             }
-            .frame(height: 22)
+            .frame(height: 14)
             .chartXAxis(.hidden)
             .chartYAxis(.hidden)
-            .cornerRadius(6)
+            .cornerRadius(4)
 
-            // Legend
-            HStack(spacing: 12) {
-                ForEach(stages) { item in
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(item.color)
-                            .frame(width: 6, height: 6)
-                        Text("\(item.stage): \(item.minutes)m")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
+            // Mini Legend
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Circle().fill(WearBridgeTheme.accentPurple).frame(width: 5, height: 5)
+                    Text("Deep \(deep)m").font(.system(size: 9)).foregroundColor(WearBridgeTheme.textSecondary)
+                    Circle().fill(WearBridgeTheme.accentCyan).frame(width: 5, height: 5)
+                    Text("REM \(rem)m").font(.system(size: 9)).foregroundColor(WearBridgeTheme.textSecondary)
+                }
+                HStack(spacing: 6) {
+                    Circle().fill(WearBridgeTheme.accentTeal).frame(width: 5, height: 5)
+                    Text("Light \(light)m").font(.system(size: 9)).foregroundColor(WearBridgeTheme.textSecondary)
                 }
             }
         }
-        .padding()
-        .background(Color(.secondarySystemGroupedBackground))
-        .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.04), radius: 6, x: 0, y: 3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard(cornerRadius: 18, padding: 14)
     }
 
-    // MARK: - 5. SpO2 Trend SwiftCharts Card
-    private var spo2TrendChartCard: some View {
-        let telemetry = healthManager.lastTelemetry
+    // Card 2: Stress & HRV
+    private func stressBentoCard(_ telemetry: HealthTelemetryPayload?) -> some View {
+        let score = telemetry?.stress.stressScore ?? 32
+        let hrv = telemetry?.stress.hrvRmssd ?? 48.5
+
+        let levelText: String
+        let levelColor: Color
+        switch score {
+        case 0..<25:
+            levelText = "Restful"
+            levelColor = WearBridgeTheme.accentTeal
+        case 25..<50:
+            levelText = "Low Stress"
+            levelColor = WearBridgeTheme.accentGreen
+        case 50..<75:
+            levelText = "Moderate"
+            levelColor = WearBridgeTheme.accentOrange
+        default:
+            levelText = "High Stress"
+            levelColor = WearBridgeTheme.accentPink
+        }
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("Stress", systemImage: "sparkles")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(levelColor)
+
+                Spacer()
+
+                // Stress Circular Gauge
+                ZStack {
+                    Circle()
+                        .stroke(Color.white.opacity(0.08), lineWidth: 3)
+                        .frame(width: 28, height: 28)
+                    Circle()
+                        .trim(from: 0, to: Double(score) / 100.0)
+                        .stroke(levelColor, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .frame(width: 28, height: 28)
+                        .rotationEffect(.degrees(-90))
+                    Text("\(score)")
+                        .font(.system(size: 9, weight: .heavy, design: .rounded))
+                        .foregroundColor(levelColor)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(levelText)
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .foregroundColor(levelColor)
+                Text("Autonomic Index")
+                    .font(.system(size: 10))
+                    .foregroundColor(WearBridgeTheme.textSecondary)
+            }
+
+            Spacer(minLength: 0)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Image(systemName: "waveform.path.ecg")
+                        .font(.system(size: 10))
+                        .foregroundColor(WearBridgeTheme.accentTeal)
+                    Text("HRV RMSSD")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(WearBridgeTheme.textSecondary)
+                }
+                Text("\(String(format: "%.1f", hrv)) ms")
+                    .font(.system(size: 14, weight: .heavy, design: .monospaced))
+                    .foregroundColor(WearBridgeTheme.textPrimary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard(cornerRadius: 18, padding: 14)
+    }
+
+    // Card 3: Blood Oxygen (SpO2 Trend)
+    private func spo2BentoCard(_ telemetry: HealthTelemetryPayload?) -> some View {
         let latest = telemetry?.spo2.latest ?? 98
         let avg = telemetry?.spo2.avg ?? 97.4
-        let minVal = telemetry?.spo2.min ?? 94
 
         struct SpO2ChartPoint: Identifiable {
             let id = UUID()
@@ -383,150 +638,80 @@ public struct DashboardView: View {
             telemetry!.spo2.samples.enumerated().map { i, s in
                 SpO2ChartPoint(timeString: String(format: "+%dh", i * 2), val: s.percentage)
             } : [
-                SpO2ChartPoint(timeString: "00:00", val: 96),
-                SpO2ChartPoint(timeString: "04:00", val: 95),
-                SpO2ChartPoint(timeString: "08:00", val: 98),
-                SpO2ChartPoint(timeString: "12:00", val: 99),
-                SpO2ChartPoint(timeString: "16:00", val: 97),
-                SpO2ChartPoint(timeString: "20:00", val: latest)
+                SpO2ChartPoint(timeString: "00", val: 96),
+                SpO2ChartPoint(timeString: "04", val: 95),
+                SpO2ChartPoint(timeString: "08", val: 98),
+                SpO2ChartPoint(timeString: "12", val: 99),
+                SpO2ChartPoint(timeString: "16", val: 97),
+                SpO2ChartPoint(timeString: "20", val: latest)
             ]
 
-        return VStack(alignment: .leading, spacing: 12) {
+        return VStack(alignment: .leading, spacing: 10) {
             HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Label("Blood Oxygen (SpO2)", systemImage: "waveform.path.ecg")
-                        .font(.footnote)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.teal)
-                    Text("\(latest)%")
-                        .font(.title3)
-                        .bold()
-                }
+                Label("SpO2", systemImage: "lungs.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(WearBridgeTheme.accentTeal)
 
                 Spacer()
 
-                HStack(spacing: 8) {
-                    VStack(alignment: .trailing, spacing: 1) {
-                        Text("Avg: \(String(format: "%.1f", avg))%")
-                            .font(.caption2)
-                        Text("Min: \(minVal)%")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                }
+                Text("Avg \(String(format: "%.0f", avg))%")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundColor(WearBridgeTheme.textSecondary)
             }
 
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(alignment: .firstTextBaseline, spacing: 2) {
+                    Text("\(latest)")
+                        .font(.system(size: 20, weight: .heavy, design: .rounded))
+                        .foregroundColor(WearBridgeTheme.textPrimary)
+                    Text("%")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(WearBridgeTheme.accentTeal)
+                }
+                Text("Blood Oxygen")
+                    .font(.system(size: 10))
+                    .foregroundColor(WearBridgeTheme.textSecondary)
+            }
+
+            // SwiftChart: SpO2 Line Chart
             Chart {
                 ForEach(points) { p in
                     LineMark(
                         x: .value("Time", p.timeString),
                         y: .value("SpO2", p.val)
                     )
-                    .foregroundStyle(Color.teal)
+                    .foregroundStyle(WearBridgeTheme.accentTeal)
                     .interpolationMethod(.catmullRom)
 
                     AreaMark(
                         x: .value("Time", p.timeString),
-                        yStart: .value("Baseline", 90),
+                        yStart: .value("Base", 90),
                         yEnd: .value("SpO2", p.val)
                     )
-                    .foregroundStyle(LinearGradient(colors: [.teal.opacity(0.3), .clear], startPoint: .top, endPoint: .bottom))
-
-                    PointMark(
-                        x: .value("Time", p.timeString),
-                        y: .value("SpO2", p.val)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [WearBridgeTheme.accentTeal.opacity(0.35), WearBridgeTheme.accentTeal.opacity(0.0)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
                     )
-                    .foregroundStyle(Color.teal)
                 }
 
                 RuleMark(y: .value("Target", 95))
-                    .foregroundStyle(Color.secondary.opacity(0.4))
-                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
-                    .annotation(position: .top, alignment: .trailing) {
-                        Text("95% Normal Threshold")
-                            .font(.system(size: 8))
-                            .foregroundColor(.secondary)
-                    }
+                    .foregroundStyle(Color.white.opacity(0.2))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
             }
-            .frame(height: 100)
+            .frame(height: 48)
             .chartYScale(domain: 90...100)
+            .chartXAxis(.hidden)
+            .chartYAxis(.hidden)
         }
-        .padding()
-        .background(Color(.secondarySystemGroupedBackground))
-        .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.04), radius: 6, x: 0, y: 3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard(cornerRadius: 18, padding: 14)
     }
 
-    // MARK: - 6. Stress Score & HRV Gauge Card
-    private var stressScoreCard: some View {
-        let telemetry = healthManager.lastTelemetry
-        let score = telemetry?.stress.stressScore ?? 32
-        let hrv = telemetry?.stress.hrvRmssd ?? 48.5
-
-        let levelText: String
-        let levelColor: Color
-        switch score {
-        case 0..<25:
-            levelText = "Restful"
-            levelColor = .blue
-        case 25..<50:
-            levelText = "Low Stress"
-            levelColor = .green
-        case 50..<75:
-            levelText = "Moderate"
-            levelColor = .orange
-        default:
-            levelText = "High Stress"
-            levelColor = .red
-        }
-
-        return HStack(spacing: 16) {
-            VStack(alignment: .leading, spacing: 4) {
-                Label("Stress & Autonomic Balance", systemImage: "sparkles")
-                    .font(.footnote)
-                    .fontWeight(.semibold)
-                    .foregroundColor(levelColor)
-
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text("\(score)")
-                        .font(.title)
-                        .bold()
-                    Text(levelText)
-                        .font(.subheadline)
-                        .foregroundColor(levelColor)
-                        .fontWeight(.medium)
-                }
-
-                Text("HRV RMSSD: \(String(format: "%.1f", hrv)) ms")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
-
-            Spacer()
-
-            ZStack {
-                Circle()
-                    .stroke(Color.secondary.opacity(0.15), lineWidth: 8)
-                    .frame(width: 58, height: 58)
-                Circle()
-                    .trim(from: 0, to: Double(score) / 100.0)
-                    .stroke(levelColor, style: StrokeStyle(lineWidth: 8, lineCap: .round))
-                    .frame(width: 58, height: 58)
-                    .rotationEffect(.degrees(-90))
-                Image(systemName: "figure.mind.and.body")
-                    .font(.system(size: 20))
-                    .foregroundColor(levelColor)
-            }
-        }
-        .padding()
-        .background(Color(.secondarySystemGroupedBackground))
-        .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.04), radius: 6, x: 0, y: 3)
-    }
-
-    // MARK: - 7. Active vs Total Calories Burned Card
-    private var caloriesBurnedCard: some View {
-        let telemetry = healthManager.lastTelemetry
+    // Card 4: Daily Activity Calories
+    private func caloriesBentoCard(_ telemetry: HealthTelemetryPayload?) -> some View {
         let total = telemetry?.calories.total ?? 2150.0
         let active = telemetry?.calories.active ?? 450.0
         let targetActive = 500.0
@@ -534,50 +719,99 @@ public struct DashboardView: View {
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Label("Calories Burned", systemImage: "flame.fill")
-                        .font(.footnote)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.red)
-
-                    Text("\(Int(total)) kcal")
-                        .font(.title2)
-                        .bold()
-                }
+                Label("Calories", systemImage: "flame.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(WearBridgeTheme.accentOrange)
 
                 Spacer()
 
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text("Active: \(Int(active)) kcal")
-                        .font(.subheadline)
-                        .bold()
-                        .foregroundColor(.red)
-                    Text("Goal: \(Int(targetActive)) kcal")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
+                Text("\(Int(activeFraction * 100))%")
+                    .font(.system(size: 10, weight: .heavy, design: .rounded))
+                    .foregroundColor(WearBridgeTheme.accentOrange)
             }
 
-            ProgressView(value: activeFraction)
-                .tint(.red)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("\(Int(total))")
+                    .font(.system(size: 20, weight: .heavy, design: .rounded))
+                    .foregroundColor(WearBridgeTheme.textPrimary)
+                Text("Total kcal burned")
+                    .font(.system(size: 10))
+                    .foregroundColor(WearBridgeTheme.textSecondary)
+            }
 
-            HStack {
-                Text(String(format: "%.0f%% of active daily goal", activeFraction * 100))
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                Spacer()
-                Text("Channel 0x04")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+            Spacer(minLength: 0)
+
+            // Active Progress Bar
+            VStack(alignment: .leading, spacing: 4) {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(Color.white.opacity(0.08))
+                            .frame(height: 7)
+
+                        Capsule()
+                            .fill(
+                                LinearGradient(
+                                    colors: [WearBridgeTheme.accentOrange, WearBridgeTheme.accentPink],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .frame(width: geo.size.width * CGFloat(activeFraction), height: 7)
+                    }
+                }
+                .frame(height: 7)
+
+                HStack {
+                    Text("Active: \(Int(active)) kcal")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(WearBridgeTheme.accentOrange)
+                    Spacer()
+                    Text("Goal: \(Int(targetActive))")
+                        .font(.system(size: 9))
+                        .foregroundColor(WearBridgeTheme.textTertiary)
+                }
             }
         }
-        .padding()
-        .background(Color(.secondarySystemGroupedBackground))
-        .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.04), radius: 6, x: 0, y: 3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard(cornerRadius: 18, padding: 14)
     }
 
-    // MARK: - Actions & Formatters
+    // MARK: - Actions
+    private func triggerPing() {
+        isPinging = true
+        pingResult = nil
+        viewModel.sendTestPing { result in
+            isPinging = false
+            switch result {
+            case .success(let ms):
+                pingResult = "\(ms)ms RTT"
+            case .failure:
+                pingResult = "Err"
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                pingResult = nil
+            }
+        }
+    }
+
+    private func triggerSyncAll() {
+        isSyncingAll = true
+        syncResult = nil
+        viewModel.forceSyncContactsAndWeather { result in
+            isSyncingAll = false
+            switch result {
+            case .success:
+                syncResult = "Synced"
+            case .failure:
+                syncResult = "Failed"
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                syncResult = nil
+            }
+        }
+    }
+
     private func pullTelemetry() {
         isPullingTelemetry = true
         telemetryMessage = "Requesting telemetry..."
@@ -590,6 +824,13 @@ public struct DashboardView: View {
                 telemetryMessage = "Failed: \(err.localizedDescription)"
             }
         }
+    }
+
+    // MARK: - Helpers & Formatters
+    private func rssiColor(_ rssi: Int) -> Color {
+        if rssi >= -65 { return WearBridgeTheme.accentGreen }
+        if rssi >= -80 { return WearBridgeTheme.accentOrange }
+        return WearBridgeTheme.accentPink
     }
 
     private func weatherConditionText(code: Int) -> String {
@@ -626,4 +867,3 @@ public struct DashboardView: View {
         return formatter.string(from: date).lowercased()
     }
 }
-

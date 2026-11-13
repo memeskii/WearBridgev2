@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [2.1.0] - 2026-11-13
+
+- Added separate notification and companion connection status, a BLE heartbeat, and GATT timeout recovery.
+- Improved playback feedback, cached weather and battery status, and watch screen lifecycle handling.
+- Added file transfer checkpoints for brief disconnects and verified staging before replacing a file.
+- Moved release signing configuration to environment variables and removed the tracked keystore.
+
 ## [2.0.0] - 2026-11-04
 
 ### Major Overhaul: The Complete iOS-to-WearOS Bridge Ecosystem

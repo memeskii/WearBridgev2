@@ -26,7 +26,6 @@
 -keep class com.wearos.ancsbridge.ancs.BootReceiver { *; }
 -keep class com.wearos.ancsbridge.ancs.AncsService { *; }
 -keep class com.wearos.ancsbridge.ancs.AncsConnectionService { *; }
--keep class com.wearos.ancsbridge.ble.BLEClientService { *; }
 
 # Retain generic type signatures & annotations for JSON parsing
 -keepattributes Signature, InnerClasses, EnclosingMethod, *Annotation*

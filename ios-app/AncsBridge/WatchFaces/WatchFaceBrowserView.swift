@@ -14,6 +14,7 @@ public struct WatchFaceBrowserView: View {
     @State private var interceptedDownload: URL?
     @State private var showDownloadPushAlert = false
     @State private var alertMessage = ""
+    @State private var transferError: String?
 
     private let bookmarks: [(title: String, url: String)] = [
         ("Wear OS Hub", "https://wearos.google.com/watchfaces"),
@@ -26,27 +27,33 @@ public struct WatchFaceBrowserView: View {
 
     public var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                // Dual Mode Picker
-                Picker("Mode", selection: $selectedMode) {
-                    Text("Watch Face Hub").tag(0)
-                    Text("Browser & Files").tag(1)
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal)
-                .padding(.vertical, 8)
+            ZStack(alignment: .bottom) {
+                VStack(spacing: 0) {
+                    // Dual Mode Segmented Picker
+                    Picker("Mode", selection: $selectedMode) {
+                        Text("Watch Face Hub").tag(0)
+                        Text("Browser & Files").tag(1)
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(WearBridgeTheme.obsidianBackground)
 
-                if selectedMode == 0 {
-                    // Mode A: Curated & Custom Repository Feed
-                    storeHubView
-                } else {
-                    // Mode B: Web Browser & File Importer
-                    webBrowserAndFilesView
+                    if selectedMode == 0 {
+                        // Mode A: Curated & Custom Repository Feed
+                        storeHubView
+                    } else {
+                        // Mode B: Web Browser & File Importer
+                        webBrowserAndFilesView
+                    }
                 }
+                .background(WearBridgeTheme.obsidianBackground.ignoresSafeArea())
 
-                // Active File Transfer Progress Bar
+                // Floating Dynamic Island-Style Transfer Banner (Bottom Overlay)
                 if transferManager.isTransferring {
-                    activeTransferBanner
+                    floatingDynamicIslandBanner
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .animation(.spring(response: 0.35, dampingFraction: 0.75), value: transferManager.isTransferring)
                 }
             }
             .navigationTitle("Watch Faces")
@@ -57,12 +64,14 @@ public struct WatchFaceBrowserView: View {
                             showSettingsSheet = true
                         } label: {
                             Image(systemName: "gearshape")
+                                .foregroundColor(WearBridgeTheme.accentTeal)
                         }
                     } else {
                         Button {
                             showFileImporter = true
                         } label: {
                             Image(systemName: "doc.badge.plus")
+                                .foregroundColor(WearBridgeTheme.accentTeal)
                         }
                     }
                 }
@@ -76,6 +85,14 @@ public struct WatchFaceBrowserView: View {
                 allowsMultipleSelection: false
             ) { result in
                 handleFileImportResult(result)
+            }
+            .alert("Watch Face Error", isPresented: Binding(
+                get: { transferError != nil },
+                set: { if !$0 { transferError = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(transferError ?? "")
             }
             .alert("Watch Face Downloaded", isPresented: $showDownloadPushAlert, presenting: interceptedDownload) { downloadUrl in
                 Button("Push to Watch (0x07)") {
@@ -93,27 +110,41 @@ public struct WatchFaceBrowserView: View {
         ScrollView {
             LazyVStack(spacing: 14) {
                 // Header Banner
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 6) {
                     HStack {
-                        Image(systemName: "clock.arrow.2.circlepath")
-                            .font(.title2)
-                            .foregroundColor(.blue)
-                        Text("3rd-Party Watch Faces")
-                            .font(.headline)
+                        ZStack {
+                            Circle()
+                                .fill(WearBridgeTheme.accentTeal.opacity(0.18))
+                                .frame(width: 36, height: 36)
+                            Image(systemName: "clock.arrow.2.circlepath")
+                                .font(.system(size: 17, weight: .bold))
+                                .foregroundColor(WearBridgeTheme.accentTeal)
+                        }
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("3rd-Party Watch Faces")
+                                .font(.system(size: 16, weight: .bold, design: .rounded))
+                                .foregroundColor(WearBridgeTheme.textPrimary)
+                            Text("Channel 0x07 Turbo Streaming")
+                                .font(.system(size: 10, weight: .heavy, design: .monospaced))
+                                .foregroundColor(WearBridgeTheme.accentTeal)
+                        }
+
                         Spacer()
+
                         if storeManager.isLoadingCatalog {
                             ProgressView()
+                                .tint(WearBridgeTheme.accentTeal)
                                 .scaleEffect(0.8)
                         }
                     }
-                    Text("Stream Watch Face Format (.wff) and .apk packages to your watch over Channel 0x07.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+
+                    Text("Stream Watch Face Format (.wff) and .apk packages to your watch over high-throughput windowed BLE.")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(WearBridgeTheme.textSecondary)
                 }
-                .padding()
-                .background(Color(.secondarySystemBackground))
-                .cornerRadius(12)
-                .padding(.horizontal)
+                .glassCard(cornerRadius: 18, padding: 14)
+                .padding(.horizontal, 16)
 
                 // Catalog Cards
                 ForEach(storeManager.catalog) { item in
@@ -122,11 +153,11 @@ public struct WatchFaceBrowserView: View {
 
                 // Local Saved Files Section
                 if !storeManager.downloadedFiles.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("SAVED ON IPHONE")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .padding(.horizontal)
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("SAVED PACKAGES ON IPHONE")
+                            .font(.system(size: 10, weight: .heavy, design: .monospaced))
+                            .foregroundColor(WearBridgeTheme.textTertiary)
+                            .padding(.horizontal, 20)
                             .padding(.top, 8)
 
                         ForEach(storeManager.downloadedFiles, id: \.self) { fileUrl in
@@ -135,7 +166,8 @@ public struct WatchFaceBrowserView: View {
                     }
                 }
             }
-            .padding(.vertical, 8)
+            .padding(.vertical, 10)
+            .padding(.bottom, transferManager.isTransferring ? 80 : 20)
         }
         .refreshable {
             storeManager.loadCatalog()
@@ -144,133 +176,186 @@ public struct WatchFaceBrowserView: View {
     }
 
     private func watchFaceCard(_ item: WatchFaceItem) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 12) {
-                // Watch Face Icon
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 14) {
+                // Watch Face Glowing Icon
                 ZStack {
                     Circle()
-                        .fill(LinearGradient(colors: [.blue.opacity(0.8), .indigo], startPoint: .topLeading, endPoint: .bottomTrailing))
+                        .fill(
+                            LinearGradient(
+                                colors: [WearBridgeTheme.accentTeal, WearBridgeTheme.accentPurple],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
                         .frame(width: 52, height: 52)
+                        .shadow(color: WearBridgeTheme.accentTeal.opacity(0.35), radius: 8)
+
                     Image(systemName: "clock.fill")
-                        .font(.title3)
+                        .font(.system(size: 24, weight: .semibold))
                         .foregroundColor(.white)
                 }
 
                 VStack(alignment: .leading, spacing: 3) {
                     HStack {
                         Text(item.title)
-                            .font(.system(.body, design: .rounded))
-                            .bold()
+                            .font(.system(size: 16, weight: .bold, design: .rounded))
+                            .foregroundColor(WearBridgeTheme.textPrimary)
+
                         Spacer()
+
                         Text(item.formattedSize)
-                            .font(.caption2)
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Color.blue.opacity(0.15))
-                            .foregroundColor(.blue)
-                            .cornerRadius(4)
+                            .background(WearBridgeTheme.accentTeal.opacity(0.15))
+                            .foregroundColor(WearBridgeTheme.accentTeal)
+                            .cornerRadius(5)
                     }
 
                     Text("By \(item.author) • v\(item.version)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(WearBridgeTheme.textSecondary)
 
                     Text(item.description)
-                        .font(.caption2)
-                        .foregroundColor(.primary)
+                        .font(.system(size: 11))
+                        .foregroundColor(WearBridgeTheme.textTertiary)
                         .lineLimit(2)
                         .padding(.top, 2)
                 }
             }
 
             Divider()
+                .background(WearBridgeTheme.strokeSubtle)
 
             HStack {
-                Label(item.fileName.hasSuffix(".wff") ? "WFF Package" : "APK Installer", systemImage: "shippingbox")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+                HStack(spacing: 5) {
+                    Image(systemName: item.fileName.hasSuffix(".wff") ? "doc.plaintext" : "shippingbox.fill")
+                        .font(.system(size: 11))
+                        .foregroundColor(WearBridgeTheme.accentCyan)
+                    Text(item.fileName.hasSuffix(".wff") ? "WFF Package" : "APK Package")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundColor(WearBridgeTheme.accentCyan)
+                }
 
                 Spacer()
 
                 Button {
                     sendWatchFaceToWatch(item)
                 } label: {
-                    HStack(spacing: 4) {
+                    HStack(spacing: 5) {
                         Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 13, weight: .bold))
                         Text("Send to Watch")
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
                     }
-                    .font(.footnote)
-                    .bold()
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(8)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(
+                        LinearGradient(
+                            colors: [WearBridgeTheme.accentTeal, WearBridgeTheme.accentCyan],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .foregroundColor(WearBridgeTheme.obsidianBackground)
+                    .clipShape(Capsule())
+                    .shadow(color: WearBridgeTheme.accentTeal.opacity(0.3), radius: 6)
                 }
                 .disabled(transferManager.isTransferring)
             }
         }
-        .padding()
-        .background(Color(.secondarySystemBackground))
-        .cornerRadius(12)
-        .padding(.horizontal)
+        .glassCard(cornerRadius: 18, padding: 14)
+        .padding(.horizontal, 16)
     }
 
     private func savedFileRow(_ fileUrl: URL) -> some View {
-        HStack {
-            Image(systemName: "doc.fill")
-                .foregroundColor(.blue)
+        HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(WearBridgeTheme.accentTeal.opacity(0.15))
+                    .frame(width: 36, height: 36)
+                Image(systemName: "doc.fill")
+                    .font(.system(size: 15))
+                    .foregroundColor(WearBridgeTheme.accentTeal)
+            }
+
             VStack(alignment: .leading, spacing: 2) {
                 Text(fileUrl.lastPathComponent)
-                    .font(.footnote)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundColor(WearBridgeTheme.textPrimary)
                     .lineLimit(1)
+
                 if let size = try? fileUrl.resourceValues(forKeys: [.fileSizeKey]).fileSize {
                     Text(String(format: "%.1f KB", Double(size) / 1024.0))
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundColor(WearBridgeTheme.textSecondary)
                 }
             }
+
             Spacer()
 
             Button("Send (0x07)") {
                 sendLocalFileToWatch(fileUrl: fileUrl)
             }
-            .font(.caption2)
-            .buttonStyle(.borderedProminent)
+            .font(.system(size: 11, weight: .bold, design: .rounded))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(WearBridgeTheme.accentCyan.opacity(0.18))
+            .foregroundColor(WearBridgeTheme.accentCyan)
+            .cornerRadius(8)
             .disabled(transferManager.isTransferring)
 
             Button {
                 storeManager.deleteDownloadedFile(url: fileUrl)
             } label: {
                 Image(systemName: "trash")
-                    .foregroundColor(.red)
+                    .font(.system(size: 13))
+                    .foregroundColor(WearBridgeTheme.accentPink)
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.plain)
         }
-        .padding()
-        .background(Color(.secondarySystemBackground))
-        .cornerRadius(10)
-        .padding(.horizontal)
+        .glassCard(cornerRadius: 14, padding: 12)
+        .padding(.horizontal, 16)
     }
 
     // MARK: - Mode B: Web Browser & Files View
     private var webBrowserAndFilesView: some View {
         VStack(spacing: 0) {
             // URL Bar & Bookmarks
-            VStack(spacing: 6) {
-                HStack(spacing: 6) {
-                    TextField("Enter watch face URL or search", text: $webUrlInput)
-                        .textFieldStyle(.roundedBorder)
-                        .autocapitalization(.none)
-                        .keyboardType(.URL)
+            VStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 12))
+                            .foregroundColor(WearBridgeTheme.textTertiary)
+
+                        TextField("Enter watch face URL or search", text: $webUrlInput)
+                            .font(.system(size: 13))
+                            .foregroundColor(WearBridgeTheme.textPrimary)
+                            .autocapitalization(.none)
+                            .keyboardType(.URL)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(WearBridgeTheme.cardSurface)
+                    .cornerRadius(10)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(WearBridgeTheme.strokeSubtle, lineWidth: 1)
+                    )
 
                     Button("Go") {
                         loadWebUrl(webUrlInput)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
+                    .font(.system(size: 12, weight: .bold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(WearBridgeTheme.accentTeal)
+                    .foregroundColor(WearBridgeTheme.obsidianBackground)
+                    .cornerRadius(10)
                 }
-                .padding(.horizontal)
+                .padding(.horizontal, 16)
 
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -279,17 +364,26 @@ public struct WatchFaceBrowserView: View {
                                 webUrlInput = b.url
                                 loadWebUrl(b.url)
                             }
-                            .font(.caption2)
-                            .buttonStyle(.bordered)
+                            .font(.system(size: 11, weight: .medium))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(WearBridgeTheme.cardSurface)
+                            .foregroundColor(WearBridgeTheme.textPrimary)
+                            .cornerRadius(8)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(WearBridgeTheme.strokeSubtle, lineWidth: 1)
+                            )
                         }
                     }
-                    .padding(.horizontal)
+                    .padding(.horizontal, 16)
                 }
             }
-            .padding(.vertical, 6)
-            .background(Color(.systemBackground))
+            .padding(.vertical, 8)
+            .background(WearBridgeTheme.obsidianBackground)
 
             Divider()
+                .background(WearBridgeTheme.strokeSubtle)
 
             // Embedded Web View with download interception
             WatchFaceWebView(
@@ -302,62 +396,142 @@ public struct WatchFaceBrowserView: View {
             )
 
             // Local File Importer Bar
-            HStack {
-                Image(systemName: "folder")
-                    .foregroundColor(.blue)
+            HStack(spacing: 10) {
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 14))
+                    .foregroundColor(WearBridgeTheme.accentTeal)
+
                 Text("Select custom .apk, .wff, or file")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(WearBridgeTheme.textSecondary)
+
                 Spacer()
+
                 Button("Browse Files") {
                     showFileImporter = true
                 }
-                .font(.caption)
-                .buttonStyle(.bordered)
+                .font(.system(size: 11, weight: .bold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(WearBridgeTheme.cardElevated)
+                .foregroundColor(WearBridgeTheme.accentTeal)
+                .cornerRadius(8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(WearBridgeTheme.accentTeal.opacity(0.3), lineWidth: 1)
+                )
             }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
-            .background(Color(.secondarySystemBackground))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(WearBridgeTheme.cardBackground)
         }
     }
 
-    // MARK: - Active Transfer Banner
-    private var activeTransferBanner: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Label("Channel 0x07 Streaming", systemImage: "antenna.radiowaves.left.and.right")
-                    .font(.caption)
-                    .bold()
-                Spacer()
-                Text(String(format: "%.1f KB/s", transferManager.transferSpeedKBps))
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+    // MARK: - Floating Dynamic Island-Style Transfer Banner
+    private var floatingDynamicIslandBanner: some View {
+        let transfer = transferManager.currentTransfer
+        let windowText = "Window \(transfer?.currentWindow ?? 0) / \(transfer?.totalWindows ?? 1) (32KB)"
+        let speedText = String(format: "%.1f KB/s", transferManager.transferSpeedKBps)
+        let hashStatus = transfer?.sha256 != nil ? "SHA-256 Verified" : "SHA-256 Hashing..."
+        let progress = transferManager.transferProgress
 
-                Button("Cancel", role: .destructive) {
-                    transferManager.cancelTransfer()
+        return HStack(spacing: 12) {
+            // Circular Progress Ring
+            ZStack {
+                Circle()
+                    .stroke(WearBridgeTheme.strokeColor, lineWidth: 3.5)
+                    .frame(width: 38, height: 38)
+
+                Circle()
+                    .trim(from: 0, to: CGFloat(progress))
+                    .stroke(
+                        LinearGradient(
+                            colors: [WearBridgeTheme.accentTeal, WearBridgeTheme.accentCyan],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        style: StrokeStyle(lineWidth: 3.5, lineCap: .round)
+                    )
+                    .frame(width: 38, height: 38)
+                    .rotationEffect(.degrees(-90))
+
+                Text(String(format: "%.0f%%", progress * 100))
+                    .font(.system(size: 9, weight: .heavy, design: .rounded))
+                    .foregroundColor(WearBridgeTheme.textPrimary)
+            }
+
+            // Transfer Metadata
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(transfer?.fileName ?? "Channel 0x07 Streaming")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(WearBridgeTheme.textPrimary)
+                        .lineLimit(1)
+
+                    Text("0x07")
+                        .font(.system(size: 8, weight: .heavy, design: .monospaced))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(WearBridgeTheme.accentPurple.opacity(0.2))
+                        .foregroundColor(WearBridgeTheme.accentPurple)
+                        .cornerRadius(3)
                 }
-                .font(.caption2)
+
+                HStack(spacing: 6) {
+                    Text(windowText)
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundColor(WearBridgeTheme.accentTeal)
+
+                    Text("•")
+                        .foregroundColor(WearBridgeTheme.textTertiary)
+
+                    Text(speedText)
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundColor(WearBridgeTheme.accentCyan)
+                }
+
+                Text(hashStatus)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(WearBridgeTheme.accentGreen)
             }
 
-            ProgressView(value: transferManager.transferProgress)
-                .progressViewStyle(.linear)
+            Spacer()
 
-            HStack {
-                Text(transferManager.transferStatusText)
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                Spacer()
-                Text(String(format: "%.0f%%", transferManager.transferProgress * 100))
-                    .font(.caption2)
-                    .bold()
+            // Cancel Button
+            Button {
+                transferManager.cancelTransfer()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 24))
+                    .foregroundColor(WearBridgeTheme.accentPink)
             }
+            .buttonStyle(.plain)
         }
-        .padding()
-        .background(Color(.tertiarySystemBackground))
-        .cornerRadius(12)
-        .padding(.horizontal)
-        .padding(.bottom, 6)
-        .shadow(radius: 2)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(
+            Capsule()
+                .fill(Color(red: 0.05, green: 0.06, blue: 0.09).opacity(0.92))
+                .background(
+                    Capsule()
+                        .fill(.ultraThinMaterial)
+                )
+        )
+        .overlay(
+            Capsule()
+                .stroke(
+                    LinearGradient(
+                        colors: [WearBridgeTheme.accentTeal.opacity(0.6), WearBridgeTheme.accentPurple.opacity(0.4), WearBridgeTheme.strokeColor],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1.2
+                )
+        )
+        .shadow(color: WearBridgeTheme.accentTeal.opacity(0.25), radius: 16, x: 0, y: 6)
+        .shadow(color: Color.black.opacity(0.6), radius: 12, x: 0, y: 4)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 12)
     }
 
     // MARK: - Repository Settings Sheet
@@ -402,7 +576,13 @@ public struct WatchFaceBrowserView: View {
             if formatted.contains(".") && !formatted.contains(" ") {
                 formatted = "https://" + formatted
             } else {
-                formatted = "https://www.google.com/search?q=" + formatted.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
+                var search = URLComponents()
+                search.scheme = "https"
+                search.host = "www.google.com"
+                search.path = "/search"
+                search.queryItems = [URLQueryItem(name: "q", value: formatted)]
+                guard let url = search.url else { return }
+                formatted = url.absoluteString
             }
         }
         webUrlInput = formatted
@@ -414,7 +594,7 @@ public struct WatchFaceBrowserView: View {
             case .success(let localUrl):
                 sendLocalFileToWatch(fileUrl: localUrl)
             case .failure(let error):
-                loggerError("Failed to prepare watch face package: \(error.localizedDescription)")
+                transferError = error.localizedDescription
             }
         }
     }
@@ -425,7 +605,9 @@ public struct WatchFaceBrowserView: View {
             case .success(let path):
                 loggerInfo("Watch face delivered and verified on watch: \(path)")
             case .failure(let error):
-                loggerError("File transfer failed: \(error.localizedDescription)")
+                if transferManager.currentTransfer?.status != .cancelled {
+                    transferError = error.localizedDescription
+                }
             }
         }
     }
@@ -434,14 +616,16 @@ public struct WatchFaceBrowserView: View {
         switch result {
         case .success(let urls):
             guard let selectedUrl = urls.first else { return }
-            guard selectedUrl.startAccessingSecurityScopedResource() else { return }
-            defer { selectedUrl.stopAccessingSecurityScopedResource() }
+            let accessed = selectedUrl.startAccessingSecurityScopedResource()
+            defer { if accessed { selectedUrl.stopAccessingSecurityScopedResource() } }
 
             if let saved = storeManager.saveImportedFile(sourceUrl: selectedUrl) {
                 sendLocalFileToWatch(fileUrl: saved)
+            } else {
+                transferError = "Could not copy the selected watch face file."
             }
         case .failure(let error):
-            loggerError("File import error: \(error.localizedDescription)")
+            transferError = error.localizedDescription
         }
     }
 
@@ -449,9 +633,6 @@ public struct WatchFaceBrowserView: View {
         print("[WatchFaceBrowserView] \(msg)")
     }
 
-    private func loggerError(_ msg: String) {
-        print("[WatchFaceBrowserView ERROR] \(msg)")
-    }
 }
 
 // MARK: - Embedded Web View with Download Interception
@@ -493,7 +674,6 @@ struct WatchFaceWebView: UIViewRepresentable {
             if let url = navigationAction.request.url {
                 let pathExt = url.pathExtension.lowercased()
                 if pathExt == "apk" || pathExt == "wff" || pathExt == "watch" {
-                    // Intercept download
                     decisionHandler(.download, preferences)
                     return
                 }
@@ -514,7 +694,6 @@ struct WatchFaceWebView: UIViewRepresentable {
             decisionHandler(.allow)
         }
 
-        // WKDownloadDelegate
         func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
             download.delegate = self
         }
@@ -532,7 +711,6 @@ struct WatchFaceWebView: UIViewRepresentable {
         }
 
         func downloadDidFinish(_ download: WKDownload) {
-            // Locate saved file in watchFacesDirectory
             WatchFaceStoreManager.shared.refreshDownloadedFiles()
             if let latest = WatchFaceStoreManager.shared.downloadedFiles.first {
                 let sha = FileTransferManager.computeSha256(url: latest) ?? ""

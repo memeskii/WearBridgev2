@@ -17,10 +17,10 @@ struct ContentView: View {
                     Label("Watch Faces", systemImage: "clock.arrow.2.circlepath")
                 }
 
-            // Tab 3: Device Sync & Media
+            // Tab 3: Device Sync & Message Reply Relay
             DeviceSyncView()
                 .tabItem {
-                    Label("Sync & Media", systemImage: "music.note.list")
+                    Label("Sync & Relay", systemImage: "arrow.triangle.2.circlepath.circle.fill")
                 }
 
             // Tab 4: Settings & Diagnostics

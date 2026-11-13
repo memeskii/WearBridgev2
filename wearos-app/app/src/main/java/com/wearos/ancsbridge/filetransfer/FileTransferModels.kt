@@ -24,7 +24,11 @@ data class FileTransferProgress(
 )
 
 object FileTransferConstants {
+    const val HEADER_CONTROL_JSON: Byte = 0x01
+    const val HEADER_RAW_BINARY: Byte = 0x02
+
     const val CMD_FILE_START = "FILE_START"
+    const val CMD_FILE_START_ACK = "FILE_START_ACK"
     const val CMD_FILE_WINDOW_ACK = "FILE_WINDOW_ACK"
     const val CMD_FILE_END = "FILE_END"
     const val CMD_FILE_COMPLETE = "FILE_COMPLETE"
@@ -41,6 +45,22 @@ object FileTransferConstants {
     const val WINDOW_SIZE_BYTES = 32 * 1024 // 32KB
 }
 
+data class FileStartAckPayload(
+    val cmd: String = FileTransferConstants.CMD_FILE_START_ACK,
+    val transferId: String,
+    val status: String = "READY",
+    val message: String = "Stream opened successfully"
+) {
+    fun toJson(): String {
+        return JSONObject().apply {
+            put("cmd", cmd)
+            put("transferId", transferId)
+            put("status", status)
+            put("message", message)
+        }.toString()
+    }
+}
+
 data class FileStartPayload(
     val cmd: String = FileTransferConstants.CMD_FILE_START,
     val transferId: String,
@@ -48,7 +68,8 @@ data class FileStartPayload(
     val fileSize: Long,
     val fileType: String = FileTransferConstants.FILE_TYPE_WATCH_FACE,
     val sha256: String,
-    val totalWindows: Int
+    val totalWindows: Int,
+    val resumeSupported: Boolean = false
 ) {
     fun toJson(): String {
         return JSONObject().apply {
@@ -59,6 +80,7 @@ data class FileStartPayload(
             put("fileType", fileType)
             put("sha256", sha256)
             put("totalWindows", totalWindows)
+            if (resumeSupported) put("resumeSupported", true)
         }.toString()
     }
 
@@ -74,7 +96,8 @@ data class FileStartPayload(
                     fileSize = obj.getLong("fileSize"),
                     fileType = obj.optString("fileType", FileTransferConstants.FILE_TYPE_WATCH_FACE),
                     sha256 = obj.getString("sha256"),
-                    totalWindows = obj.optInt("totalWindows", 1)
+                    totalWindows = obj.optInt("totalWindows", 1),
+                    resumeSupported = obj.optBoolean("resumeSupported")
                 )
             } catch (e: Exception) {
                 null

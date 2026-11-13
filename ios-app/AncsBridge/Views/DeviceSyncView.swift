@@ -2,16 +2,16 @@ import SwiftUI
 
 public struct DeviceSyncView: View {
     @EnvironmentObject var viewModel: BLEViewModel
-    @ObservedObject private var mediaManager = MediaQoLManager.shared
+    @ObservedObject private var contactsManager = ContactsSyncManager.shared
     @ObservedObject private var relayManager = ReplyRelayManager.shared
     @ObservedObject private var otaManager = WatchOtaManager.shared
+    @ObservedObject private var mediaManager = MediaQoLManager.shared
 
-    @State private var isSyncingContacts = false
     @State private var contactsSyncMessage: String?
-    @State private var isPlayingMockMedia = false
     @State private var isShowingApkPicker = false
     @State private var useBleFallback = false
     @State private var isDownloadingGithubApk = false
+    @State private var relayTestStatus: String? = nil
 
     public init() {}
 
@@ -19,23 +19,23 @@ public struct DeviceSyncView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
-                    // 1. Now Playing Media Card
-                    nowPlayingCard
+                    // 1. Background Media Bridge Status Pill (Background service only - No playback controls)
+                    mediaBridgeStatusPill
 
-                    // 2. Contacts Auto-Sync Status Card
+                    // 2. Contacts Auto-Sync Card (Channel 0x02)
                     contactsSyncCard
 
-                    // 3. Outbound Message Reply Relay Configuration
+                    // 3. Outbound Message Reply Relay Studio (Channel 0x06)
                     messageReplyRelayCard
 
-                    // 4. Watch App Firmware / OTA Self-Update Card
+                    // 4. Watch App Firmware / OTA Turbo Self-Update Card
                     watchOtaUpdateCard
                 }
-                .padding(.horizontal)
+                .padding(.horizontal, 16)
                 .padding(.vertical, 12)
             }
-            .navigationTitle("Device Sync & Media")
-            .background(Color(.systemGroupedBackground))
+            .navigationTitle("Sync & Relay")
+            .background(WearBridgeTheme.obsidianBackground.ignoresSafeArea())
             .fileImporter(
                 isPresented: $isShowingApkPicker,
                 allowedContentTypes: [.init(filenameExtension: "apk") ?? .data],
@@ -46,226 +46,214 @@ public struct DeviceSyncView: View {
         }
     }
 
-    // MARK: - 1. Now Playing Media Card
-    private var nowPlayingCard: some View {
+    // MARK: - 1. Background Media Bridge Status Pill
+    private var mediaBridgeStatusPill: some View {
         let media = mediaManager.activeMediaItem
+        let hasActiveTrack = media != nil && !(media?.title.isEmpty ?? true)
 
-        return VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Label("NOW PLAYING (AMS + 0x05)", systemImage: "music.note")
-                    .font(.caption2)
-                    .fontWeight(.bold)
-                    .foregroundColor(.teal)
+        return HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(WearBridgeTheme.accentTeal.opacity(0.18))
+                    .frame(width: 40, height: 40)
+                Image(systemName: "wave.3.forward.circle.fill")
+                    .font(.system(size: 20))
+                    .foregroundColor(WearBridgeTheme.accentTeal)
+            }
 
-                Spacer()
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text("MEDIA BRIDGE (AMS + CH 0x05)")
+                        .font(.system(size: 10, weight: .heavy, design: .monospaced))
+                        .foregroundColor(WearBridgeTheme.accentTeal)
 
-                // Audio Route Badge
+                    Circle()
+                        .fill(hasActiveTrack ? WearBridgeTheme.accentGreen : Color.orange)
+                        .frame(width: 6, height: 6)
+                }
+
+                if let track = media, !track.title.isEmpty {
+                    Text("\(track.title) • \(track.artist)")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(WearBridgeTheme.textPrimary)
+                        .lineLimit(1)
+                } else {
+                    Text("Background Bridge Active • Standby")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(WearBridgeTheme.textSecondary)
+                }
+
+                Text("Auto-streams iOS metadata, route & artwork to watch")
+                    .font(.system(size: 10))
+                    .foregroundColor(WearBridgeTheme.textTertiary)
+            }
+
+            Spacer()
+
+            if let route = media?.audioRoute, !route.isEmpty {
                 HStack(spacing: 4) {
                     Image(systemName: "airplayaudio")
-                    Text(media?.audioRoute ?? "iPhone Speaker")
+                    Text(route)
                 }
-                .font(.caption2)
-                .fontWeight(.medium)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundColor(WearBridgeTheme.accentTeal)
                 .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(Color.teal.opacity(0.15))
-                .foregroundColor(.teal)
+                .padding(.vertical, 4)
+                .background(WearBridgeTheme.accentTeal.opacity(0.15))
                 .cornerRadius(6)
             }
-
-            HStack(spacing: 14) {
-                // Album Artwork
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(LinearGradient(colors: [.teal.opacity(0.8), .indigo], startPoint: .topLeading, endPoint: .bottomTrailing))
-                        .frame(width: 64, height: 64)
-
-                    if let artBase64 = media?.artworkBase64,
-                       let artData = Data(base64Encoded: artBase64),
-                       let uiImage = UIImage(data: artData) {
-                        Image(uiImage: uiImage)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: 64, height: 64)
-                            .cornerRadius(10)
-                    } else {
-                        Image(systemName: "music.note.list")
-                            .font(.title2)
-                            .foregroundColor(.white)
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(media?.title ?? "Blinding Lights")
-                        .font(.headline)
-                        .lineLimit(1)
-
-                    Text(media?.artist ?? "The Weeknd")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-
-                    Text(media?.album ?? "After Hours")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                }
-
-                Spacer()
-            }
-
-            // Track Progress Bar & Time
-            VStack(spacing: 4) {
-                ProgressView(value: 0.42)
-                    .tint(.teal)
-
-                HStack {
-                    Text("1:28")
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    Text("3:20")
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                }
-            }
-
-            Divider()
-
-            // Playback Controls
-            HStack {
-                Spacer()
-                Button {
-                    viewModel.testMediaQoLPush { _ in }
-                } label: {
-                    Image(systemName: "backward.fill")
-                        .font(.title3)
-                        .foregroundColor(.primary)
-                }
-
-                Spacer()
-
-                Button {
-                    viewModel.testMediaQoLPush { _ in }
-                    isPlayingMockMedia.toggle()
-                } label: {
-                    ZStack {
-                        Circle()
-                            .fill(Color.teal)
-                            .frame(width: 44, height: 44)
-                        Image(systemName: isPlayingMockMedia ? "pause.fill" : "play.fill")
-                            .font(.headline)
-                            .foregroundColor(.white)
-                    }
-                }
-
-                Spacer()
-
-                Button {
-                    viewModel.testMediaQoLPush { _ in }
-                } label: {
-                    Image(systemName: "forward.fill")
-                        .font(.title3)
-                        .foregroundColor(.primary)
-                }
-                Spacer()
-            }
         }
-        .padding()
-        .background(Color(.secondarySystemGroupedBackground))
-        .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.04), radius: 6, x: 0, y: 3)
+        .glassCard(cornerRadius: 16, padding: 14)
     }
 
     // MARK: - 2. Contacts Auto-Sync Status Card
     private var contactsSyncCard: some View {
-        let lastSyncDate = UserDefaults.standard.object(forKey: "wearbridge_contacts_last_synced") as? Date
-
-        return VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Label("CONTACTS AUTO-SYNC (0x02)", systemImage: "person.2.fill")
-                    .font(.caption2)
-                    .fontWeight(.bold)
-                    .foregroundColor(.blue)
+                Label("CONTACTS AUTO-SYNC (CH 0x02)", systemImage: "person.2.fill")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundColor(WearBridgeTheme.accentCyan)
 
                 Spacer()
 
-                Text("SHA-256 Delta")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+                HStack(spacing: 4) {
+                    Image(systemName: "lock.shield.fill")
+                    Text("SHA-256 Delta")
+                }
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundColor(WearBridgeTheme.textTertiary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(WearBridgeTheme.cardElevated)
+                .cornerRadius(4)
             }
 
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Watch Address Book")
-                        .font(.headline)
+            HStack(spacing: 16) {
+                // Live Progress Ring or Contact Icon
+                ZStack {
+                    Circle()
+                        .stroke(WearBridgeTheme.cardElevated, lineWidth: 5)
+                        .frame(width: 58, height: 58)
 
-                    if let date = lastSyncDate {
-                        Text("Last synced: \(formatSyncDate(date))")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                    if contactsManager.isSyncing {
+                        Circle()
+                            .trim(from: 0, to: 0.7)
+                            .stroke(WearBridgeTheme.accentCyan, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                            .frame(width: 58, height: 58)
+                            .rotationEffect(.degrees(contactsManager.isSyncing ? 360 : 0))
+                            .animation(.linear(duration: 1.0).repeatForever(autoreverses: false), value: contactsManager.isSyncing)
                     } else {
-                        Text("Syncs on connect & hash changes")
+                        Circle()
+                            .trim(from: 0, to: 1.0)
+                            .stroke(WearBridgeTheme.accentCyan.opacity(0.6), lineWidth: 5)
+                            .frame(width: 58, height: 58)
+                    }
+
+                    VStack(spacing: 0) {
+                        Text("\(contactsManager.syncedContactCount)")
+                            .font(.system(size: 16, weight: .bold, design: .rounded))
+                            .foregroundColor(WearBridgeTheme.textPrimary)
+                        Text("SAVED")
+                            .font(.system(size: 7, weight: .heavy))
+                            .foregroundColor(WearBridgeTheme.textTertiary)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Watch Address Book Database")
+                        .font(.headline)
+                        .foregroundColor(WearBridgeTheme.textPrimary)
+
+                    if let date = contactsManager.lastSyncDate {
+                        Text("Last Synced: \(formatSyncDate(date))")
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(WearBridgeTheme.textSecondary)
+                    } else {
+                        Text("Auto-syncs on connect and address book hash delta")
+                            .font(.caption)
+                            .foregroundColor(WearBridgeTheme.textSecondary)
+                    }
+
+                    if let hash = contactsManager.lastSyncHash {
+                        Text("Hash: \(hash.prefix(12))...")
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundColor(WearBridgeTheme.textTertiary)
                     }
 
                     if let msg = contactsSyncMessage {
                         Text(msg)
                             .font(.caption2)
-                            .foregroundColor(.blue)
+                            .foregroundColor(WearBridgeTheme.accentCyan)
                             .bold()
                             .padding(.top, 2)
                     }
                 }
 
                 Spacer()
+            }
+
+            Divider()
+                .background(WearBridgeTheme.strokeSubtle)
+
+            HStack {
+                Text("Syncs with Watch Room DB for instant caller ID & message names.")
+                    .font(.caption2)
+                    .foregroundColor(WearBridgeTheme.textTertiary)
+
+                Spacer()
 
                 Button {
                     syncContactsNow()
                 } label: {
-                    if isSyncingContacts {
+                    if contactsManager.isSyncing {
                         ProgressView()
+                            .tint(.white)
                             .scaleEffect(0.8)
                     } else {
-                        HStack(spacing: 4) {
+                        HStack(spacing: 6) {
                             Image(systemName: "arrow.triangle.2.circlepath")
                             Text("Force Sync")
                         }
                         .font(.footnote)
                         .bold()
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .background(Color.blue)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(WearBridgeTheme.accentCyan)
                         .foregroundColor(.white)
-                        .cornerRadius(8)
+                        .cornerRadius(10)
                     }
                 }
-                .disabled(isSyncingContacts)
+                .disabled(contactsManager.isSyncing)
             }
         }
-        .padding()
-        .background(Color(.secondarySystemGroupedBackground))
-        .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.04), radius: 6, x: 0, y: 3)
+        .glassCard()
     }
 
-    // MARK: - 3. Outbound Message Reply Relay Configuration
+    // MARK: - 3. Outbound Message Reply Relay Studio
     private var messageReplyRelayCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Label("OUTBOUND MESSAGE RELAY (0x06)", systemImage: "arrowshape.turn.up.left.fill")
-                .font(.caption2)
-                .fontWeight(.bold)
-                .foregroundColor(.green)
+            HStack {
+                Label("MESSAGE REPLY RELAY STUDIO (CH 0x06)", systemImage: "arrowshape.turn.up.left.fill")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundColor(WearBridgeTheme.accentGreen)
+
+                Spacer()
+
+                Text("Channel 0x06")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundColor(WearBridgeTheme.textTertiary)
+            }
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Relay Outbound Watch Replies")
                     .font(.headline)
-                Text("Select how replies transmitted over Channel 0x06 are delivered to iMessage, WhatsApp, or automation services.")
+                    .foregroundColor(WearBridgeTheme.textPrimary)
+                Text("Select how replies composed or voice-dictated on your watch are forwarded by this iPhone.")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(WearBridgeTheme.textSecondary)
             }
 
+            // Mode Selector
             Picker("Relay Mode", selection: $relayManager.currentRelayMode) {
                 Text("Webhook").tag(RelayMode.webhook)
                 Text("Shortcuts").tag(RelayMode.shortcuts)
@@ -277,47 +265,80 @@ public struct DeviceSyncView: View {
             switch relayManager.currentRelayMode {
             case .webhook:
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Webhook HTTP Endpoint (Silent Background)")
+                    Text("Silent Background Webhook Endpoint")
                         .font(.caption2)
-                        .foregroundColor(.secondary)
-                    TextField("https://your-server.com/api/reply", text: $relayManager.webhookUrl)
-                        .textFieldStyle(.roundedBorder)
-                        .autocapitalization(.none)
-                        .keyboardType(.URL)
+                        .foregroundColor(WearBridgeTheme.textSecondary)
+                    HStack {
+                        TextField("https://your-server.com/api/reply", text: $relayManager.webhookUrl)
+                            .font(.system(size: 13, design: .monospaced))
+                            .padding(10)
+                            .background(WearBridgeTheme.cardElevated)
+                            .cornerRadius(8)
+                            .autocapitalization(.none)
+                            .keyboardType(.URL)
+                            .foregroundColor(WearBridgeTheme.textPrimary)
+
+                        Button {
+                            testRelayConnection()
+                        } label: {
+                            Text("Test")
+                                .font(.caption)
+                                .bold()
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .background(WearBridgeTheme.accentGreen)
+                                .foregroundColor(.black)
+                                .cornerRadius(8)
+                        }
+                    }
                 }
 
             case .shortcuts:
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Apple Shortcuts Automation Name")
+                    Text("Apple Shortcuts Automation Trigger")
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(WearBridgeTheme.textSecondary)
                     TextField("WearBridgeReply", text: $relayManager.shortcutName)
-                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 13))
+                        .padding(10)
+                        .background(WearBridgeTheme.cardElevated)
+                        .cornerRadius(8)
+                        .foregroundColor(WearBridgeTheme.textPrimary)
 
                     Toggle(isOn: $relayManager.isBackgroundActionEnabled) {
-                        Text("Post actionable notification when locked")
+                        Text("Post actionable system alert when phone is locked")
                             .font(.footnote)
+                            .foregroundColor(WearBridgeTheme.textSecondary)
                     }
+                    .tint(WearBridgeTheme.accentGreen)
                 }
 
             case .deeplink:
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Direct Scheme Launching")
+                    Text("Direct URL Scheme Dispatch")
                         .font(.footnote)
                         .bold()
-                    Text("Directly opens whatsapp:// or sms: with draft populated when reply arrives.")
+                        .foregroundColor(WearBridgeTheme.textPrimary)
+                    Text("Automatically opens the target app (e.g. WhatsApp, SMS) with pre-filled message draft.")
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(WearBridgeTheme.textSecondary)
                 }
             }
 
+            if let testStatus = relayTestStatus {
+                Text(testStatus)
+                    .font(.caption2)
+                    .foregroundColor(WearBridgeTheme.accentGreen)
+                    .bold()
+            }
+
             Divider()
+                .background(WearBridgeTheme.strokeSubtle)
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("Supported Messaging Apps")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                    .bold()
+                Text("Supported App Brands")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundColor(WearBridgeTheme.textTertiary)
 
                 let sampleBundles: [String] = [
                     AppBrandRegistry.bundleIMessage,
@@ -333,36 +354,44 @@ public struct DeviceSyncView: View {
                         let brand = AppBrandRegistry.resolve(bundleId)
                         HStack(spacing: 8) {
                             Circle()
-                                .fill(brand.primaryColor.opacity(0.15))
-                                .frame(width: 26, height: 26)
+                                .fill(brand.primaryColor.opacity(0.2))
+                                .frame(width: 28, height: 28)
                                 .overlay(
                                     Image(systemName: brand.sfSymbol)
-                                        .font(.system(size: 11, weight: .semibold))
+                                        .font(.system(size: 12, weight: .semibold))
                                         .foregroundColor(brand.primaryColor)
                                 )
                             Text(brand.displayName)
                                 .font(.caption2)
                                 .fontWeight(.medium)
+                                .foregroundColor(WearBridgeTheme.textPrimary)
                             Spacer()
                         }
+                        .padding(6)
+                        .background(WearBridgeTheme.cardElevated.opacity(0.6))
+                        .cornerRadius(8)
                     }
                 }
             }
         }
-        .padding()
-        .background(Color(.secondarySystemGroupedBackground))
-        .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.04), radius: 6, x: 0, y: 3)
+        .glassCard()
     }
 
     // MARK: - Actions
     private func syncContactsNow() {
-        isSyncingContacts = true
-        contactsSyncMessage = "Fetching contacts..."
-        ContactsSyncManager.shared.syncContacts(force: true)
+        contactsSyncMessage = "Reading address book..."
+        contactsManager.syncContacts(force: true)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            self.isSyncingContacts = false
             self.contactsSyncMessage = "Contacts synchronized over Channel 0x02!"
+        }
+    }
+
+    private func testRelayConnection() {
+        relayTestStatus = "Testing webhook dispatch..."
+        relayManager.sendDirectReply(notificationUid: 9999, replyText: "WearBridge Ping Test") { success in
+            DispatchQueue.main.async {
+                self.relayTestStatus = success ? "✓ Webhook dispatched successfully!" : "✗ Webhook failed to respond"
+            }
         }
     }
 
@@ -378,27 +407,27 @@ public struct DeviceSyncView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Label("WATCH APP OTA UPDATE", systemImage: "arrow.triangle.2.circlepath.circle.fill")
-                    .font(.caption2)
-                    .fontWeight(.bold)
-                    .foregroundColor(.purple)
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundColor(WearBridgeTheme.accentPurple)
 
                 Spacer()
 
-                Text("Wi-Fi / Hotspot Turbo")
+                Text("Wi-Fi Turbo / BLE")
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(Color.purple.opacity(0.12))
-                    .foregroundColor(.purple)
+                    .background(WearBridgeTheme.accentPurple.opacity(0.18))
+                    .foregroundColor(WearBridgeTheme.accentPurple)
                     .cornerRadius(4)
             }
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Self-Update Watch App")
                     .font(.headline)
-                Text("Wirelessly update com.wearos.ancsbridge on your watch without a PC or ADB.")
+                    .foregroundColor(WearBridgeTheme.textPrimary)
+                Text("Wirelessly update com.wearos.ancsbridge on your watch directly from your iPhone.")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(WearBridgeTheme.textSecondary)
             }
 
             // Version status row
@@ -406,36 +435,37 @@ public struct DeviceSyncView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Installed on Watch")
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(WearBridgeTheme.textTertiary)
                     Text(otaManager.installedWatchVersion)
                         .font(.subheadline)
                         .bold()
+                        .foregroundColor(WearBridgeTheme.textPrimary)
                 }
 
                 Spacer()
 
                 VStack(alignment: .trailing, spacing: 2) {
-                    Text("Latest Available")
+                    Text("Latest Release")
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(WearBridgeTheme.textTertiary)
                     Text(otaManager.latestRelease?.tagName ?? "v2.0.0")
                         .font(.subheadline)
                         .bold()
-                        .foregroundColor(.purple)
+                        .foregroundColor(WearBridgeTheme.accentPurple)
                 }
             }
-            .padding(10)
-            .background(Color(.tertiarySystemGroupedBackground))
+            .padding(12)
+            .background(WearBridgeTheme.cardElevated)
             .cornerRadius(10)
 
             // Status message
             HStack(spacing: 6) {
                 Circle()
-                    .fill(otaManager.otaStatusMessage.contains("failed") ? Color.red : Color.green)
+                    .fill(otaManager.otaStatusMessage.contains("failed") ? Color.red : WearBridgeTheme.accentGreen)
                     .frame(width: 8, height: 8)
                 Text(otaManager.otaStatusMessage)
                     .font(.caption2)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(WearBridgeTheme.textSecondary)
             }
 
             // Progress Indicators
@@ -447,41 +477,42 @@ public struct DeviceSyncView: View {
                         Text("Turbo Server Serving APK over Local Wi-Fi")
                             .font(.caption)
                             .bold()
-                            .foregroundColor(.purple)
+                            .foregroundColor(WearBridgeTheme.accentPurple)
                     }
                     Text(url)
                         .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(WearBridgeTheme.textTertiary)
                 }
-                .padding(8)
-                .background(Color.purple.opacity(0.08))
+                .padding(10)
+                .background(WearBridgeTheme.accentPurple.opacity(0.12))
                 .cornerRadius(8)
             } else if case .streamingOverBle(let progress) = otaManager.otaState {
                 VStack(alignment: .leading, spacing: 4) {
                     ProgressView(value: progress, total: 1.0)
-                        .tint(.purple)
+                        .tint(WearBridgeTheme.accentPurple)
                     Text("Streaming over BLE: \(Int(progress * 100))%")
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(WearBridgeTheme.textSecondary)
                 }
             } else if case .downloadingToPhone(let progress) = otaManager.otaState {
                 VStack(alignment: .leading, spacing: 4) {
                     ProgressView(value: progress, total: 1.0)
-                        .tint(.blue)
+                        .tint(WearBridgeTheme.accentCyan)
                     Text("Downloading APK to iPhone: \(Int(progress * 100))%")
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(WearBridgeTheme.textSecondary)
                 }
             } else if case .watchInstalling = otaManager.otaState {
                 HStack(spacing: 8) {
                     Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
+                        .foregroundColor(WearBridgeTheme.accentGreen)
                     Text("Update transferred! Tap 'Update' on watch screen.")
                         .font(.caption)
                         .bold()
+                        .foregroundColor(WearBridgeTheme.accentGreen)
                 }
-                .padding(8)
-                .background(Color.green.opacity(0.1))
+                .padding(10)
+                .background(WearBridgeTheme.accentGreen.opacity(0.12))
                 .cornerRadius(8)
             }
 
@@ -491,11 +522,13 @@ public struct DeviceSyncView: View {
                     Text("Stream over BLE (Channel 0x07)")
                         .font(.caption)
                         .bold()
+                        .foregroundColor(WearBridgeTheme.textPrimary)
                     Text("Fallback if Watch has no Wi-Fi / Hotspot connection")
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(WearBridgeTheme.textTertiary)
                 }
             }
+            .tint(WearBridgeTheme.accentPurple)
 
             // Action Buttons
             HStack(spacing: 10) {
@@ -509,9 +542,9 @@ public struct DeviceSyncView: View {
                     .font(.caption)
                     .bold()
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background(Color(.systemGray5))
-                    .foregroundColor(.primary)
+                    .padding(.vertical, 11)
+                    .background(WearBridgeTheme.cardElevated)
+                    .foregroundColor(WearBridgeTheme.textPrimary)
                     .cornerRadius(10)
                 }
 
@@ -525,8 +558,8 @@ public struct DeviceSyncView: View {
                     .font(.caption)
                     .bold()
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background(Color.purple)
+                    .padding(.vertical, 11)
+                    .background(WearBridgeTheme.accentPurple)
                     .foregroundColor(.white)
                     .cornerRadius(10)
                 }
@@ -553,17 +586,14 @@ public struct DeviceSyncView: View {
                     .font(.subheadline)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
-                    .background(Color.green)
-                    .foregroundColor(.white)
+                    .background(WearBridgeTheme.accentGreen)
+                    .foregroundColor(.black)
                     .cornerRadius(10)
                 }
                 .disabled(isDownloadingGithubApk)
             }
         }
-        .padding()
-        .background(Color(.secondarySystemGroupedBackground))
-        .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.04), radius: 6, x: 0, y: 3)
+        .glassCard()
     }
 
     private func handleApkPicked(_ result: Result<[URL], Error>) {
@@ -605,4 +635,3 @@ public struct DeviceSyncView: View {
         }
     }
 }
-

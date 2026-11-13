@@ -19,6 +19,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -48,6 +49,15 @@ class BleConnectionManager(private val context: Context) {
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val companionPackets = kotlinx.coroutines.channels.Channel<Pair<BluetoothGatt, ByteArray>>(256)
+
+    init {
+        scope.launch(Dispatchers.Default) {
+            for ((source, data) in companionPackets) {
+                if (source === gatt) handleCompanionData(data)
+            }
+        }
+    }
 
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
@@ -61,33 +71,59 @@ class BleConnectionManager(private val context: Context) {
     private val _callStateEvents = MutableSharedFlow<ByteArray>(extraBufferCapacity = 16)
     val callStateEvents: SharedFlow<ByteArray> = _callStateEvents.asSharedFlow()
 
-    var negotiatedMtu: Int = TARGET_MTU
+    var negotiatedMtu: Int = 23
         private set
 
     // BLE Packet Multiplexer instance
     val multiplexer = BLEPacketMultiplexer()
 
+    @Volatile
     private var gatt: BluetoothGatt? = null
     private var targetDevice: BluetoothDevice? = null
     private var reconnectJob: Job? = null
     private var reconnectDelay = INITIAL_RECONNECT_DELAY_MS
     private var autoReconnect = true
 
-    // CCCD write queue — must serialize descriptor writes
-    private val descriptorWriteQueue = LinkedList<Pair<BluetoothGattCharacteristic, BluetoothGattDescriptor>>()
-    private var isWritingDescriptor = false
+    // MARK: - Strict Sequential Android GATT Operation Queue
+    sealed class GattOperation {
+        data class WriteDescriptor(
+            val descriptor: BluetoothGattDescriptor,
+            val value: ByteArray
+        ) : GattOperation()
 
-    // Outbound characteristic write queue — Android permits only ONE in-flight GATT write
-    private val characteristicWriteQueue = java.util.concurrent.ConcurrentLinkedQueue<ByteArray>()
+        data class WriteCharacteristic(
+            val characteristic: BluetoothGattCharacteristic,
+            val value: ByteArray,
+            val writeType: Int = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+        ) : GattOperation()
+
+        data class ReadCharacteristic(
+            val characteristic: BluetoothGattCharacteristic
+        ) : GattOperation()
+    }
+
+    private val gattOperationQueue = java.util.concurrent.ConcurrentLinkedQueue<GattOperation>()
+    private val pendingCompanionPayloads = java.util.concurrent.ConcurrentLinkedQueue<ByteArray>()
     @Volatile
-    private var isWritingCharacteristic = false
-    private var writeWatchdogJob: Job? = null
+    private var isGattOperationInFlight = false
+    private var gattWatchdogJob: Job? = null
+    private val gattLock = Any()
+
+    private val _companionConnected = MutableStateFlow(false)
+    val companionConnected = _companionConnected.asStateFlow()
+    private var heartbeatJob: Job? = null
+    @Volatile
+    private var heartbeatConfirmed = false
+    @Volatile
+    private var lastHeartbeatReply = 0L
+    @Volatile
+    private var pendingHeartbeat = 0L
     private var companionRetryJob: Job? = null
     private var lastServiceDiscoveryTime = 0L
 
     var onDescriptorQueueDrained: (() -> Unit)? = null
     val isQueueBusy: Boolean
-        get() = isWritingDescriptor || descriptorWriteQueue.isNotEmpty() || isWritingCharacteristic || !characteristicWriteQueue.isEmpty()
+        get() = isGattOperationInFlight || !gattOperationQueue.isEmpty() || !pendingCompanionPayloads.isEmpty()
 
     private var serviceDiscoveryRetries = 0
     private var notificationSourceChar: BluetoothGattCharacteristic? = null
@@ -105,22 +141,17 @@ class BleConnectionManager(private val context: Context) {
             handleMultiplexerPayload(channel, payload)
         }
         com.wearos.ancsbridge.health.HealthTelemetryManager.getInstance(context).outboundDataDispatcher = { channel, data ->
-            val mtu = (negotiatedMtu - 3).coerceAtLeast(20)
+            val mtu = (negotiatedMtu - 3).coerceIn(20, 512)
             val chunks = multiplexer.createChunks(channel, data, mtu)
             for (chunk in chunks) {
                 enqueueCompanionWrite(chunk)
             }
         }
         mediaRepo.outboundChannelSender = { channel, data ->
-            val mtu = (negotiatedMtu - 3).coerceAtLeast(20)
-            val chunks = multiplexer.createChunks(channel, data, mtu)
-            for (chunk in chunks) {
-                enqueueCompanionWrite(chunk)
-            }
-            true
+            findCompanionCharacteristic() != null && sendChannelPayload(channel, data)
         }
         com.wearos.ancsbridge.messages.MessageReplyManager.getInstance(context).outboundReplyDispatcher = { data ->
-            val mtu = (negotiatedMtu - 3).coerceAtLeast(20)
+            val mtu = (negotiatedMtu - 3).coerceIn(20, 512)
             val chunks = multiplexer.createChunks(BLEPacketMultiplexer.CHANNEL_MESSAGE_REPLY, data, mtu)
             for (chunk in chunks) {
                 enqueueCompanionWrite(chunk)
@@ -128,21 +159,15 @@ class BleConnectionManager(private val context: Context) {
             true
         }
         com.wearos.ancsbridge.filetransfer.FileTransferManager.getInstance(context).outboundPacketSender = { data ->
-            val mtu = (negotiatedMtu - 3).coerceAtLeast(20)
+            val mtu = (negotiatedMtu - 3).coerceIn(20, 512)
             val chunks = multiplexer.createChunks(BLEPacketMultiplexer.CHANNEL_BINARY_FILE, data, mtu)
             for (chunk in chunks) {
                 enqueueCompanionWrite(chunk)
             }
         }
         amsManager.outboundWriteHandler = { char, data ->
-            val gatt = this@BleConnectionManager.gatt
-            if (gatt != null) {
-                char.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                char.value = data
-                gatt.writeCharacteristic(char)
-            } else {
-                false
-            }
+            enqueueGattOperation(GattOperation.WriteCharacteristic(char, data, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT))
+            true
         }
     }
 
@@ -162,23 +187,23 @@ class BleConnectionManager(private val context: Context) {
     )
 
     private val gattCallback = GattCallback(
+        acceptsGatt = { it === gatt },
         onConnected = { gatt ->
-            reconnectDelay = INITIAL_RECONNECT_DELAY_MS
+            negotiatedMtu = 23
             val displayName = if (isTruncatedBleName(gatt.device.name ?: "")) "iPhone" else (gatt.device.name ?: "iPhone")
             _connectionState.value = ConnectionState.Connecting(displayName)
 
             // Request higher MTU for less fragmentation
-            gatt.requestMtu(TARGET_MTU)
+            if (!gatt.requestMtu(TARGET_MTU)) gatt.discoverServices()
         },
-        onDisconnected = { gatt, status ->
+        onDisconnected = onDisconnected@{ gatt, status ->
+            if (gatt !== this.gatt) {
+                gatt.close()
+                return@onDisconnected
+            }
             Log.i(TAG, "Disconnected, status=$status")
-            _connectionState.value = ConnectionState.Disconnected()
-            clearCharacteristics()
-            gatt.close()
-            this.gatt = null
-
-            if (autoReconnect && targetDevice != null) {
-                scheduleReconnect()
+            synchronized(gattLock) {
+                if (gatt === this.gatt) retireGatt(gatt)
             }
         },
         onServicesDiscoveredCallback = { gatt, status ->
@@ -239,10 +264,14 @@ class BleConnectionManager(private val context: Context) {
             if (notificationSourceChar != null && dataSourceChar != null) {
                 Log.i(TAG, "ANCS already subscribed, checking companion service")
                 readCompanionStatus()
+                if (heartbeatJob?.isActive != true) subscribeToCompanionCharacteristic()
                 val companionChar = findCompanionCharacteristic()
-                if (companionChar != null) {
-                    Log.i(TAG, "Companion characteristic confirmed on rediscovery, processing write queue (${characteristicWriteQueue.size} pending)")
-                    processCharacteristicWriteQueue()
+                if (companionChar != null && pendingCompanionPayloads.isNotEmpty()) {
+                    Log.i(TAG, "Companion characteristic confirmed on rediscovery, flushing ${pendingCompanionPayloads.size} pending payloads")
+                    while (pendingCompanionPayloads.isNotEmpty()) {
+                        val buffered = pendingCompanionPayloads.poll() ?: break
+                        enqueueGattOperation(GattOperation.WriteCharacteristic(companionChar, buffered, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT))
+                    }
                 }
                 return@GattCallback
             }
@@ -258,7 +287,7 @@ class BleConnectionManager(private val context: Context) {
             }
 
             // Subscribe to Data Source FIRST (Apple recommendation), then Notification Source
-            subscribeToCharacteristic(dataSourceChar!!)
+            dataSourceChar?.let(::subscribeToCharacteristic)
         },
         onNotificationSourceChanged = { data ->
             _notificationSourceEvents.tryEmit(data)
@@ -267,83 +296,106 @@ class BleConnectionManager(private val context: Context) {
             _dataSourceEvents.tryEmit(data)
         },
         onDescriptorWritten = { descriptor, status ->
-            isWritingDescriptor = false
+            gattWatchdogJob?.cancel()
+            synchronized(gattLock) {
+                isGattOperationInFlight = false
+            }
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 Log.e(TAG, "Descriptor write failed: $status for ${descriptor.characteristic.uuid}")
-                return@GattCallback
-            }
-
-            val charUuid = descriptor.characteristic.uuid
-            when (charUuid) {
-                AncsConstants.DATA_SOURCE_UUID -> {
-                    Log.i(TAG, "Subscribed to Data Source, now subscribing to Notification Source")
-                    notificationSourceChar?.let { subscribeToCharacteristic(it) }
-                }
-                AncsConstants.NOTIFICATION_SOURCE_UUID -> {
-                    Log.i(TAG, "Subscribed to Notification Source — ANCS session active!")
-                    // Show initial name (may be truncated BLE name)
-                    val deviceName = resolveDeviceName()
-                    _connectionState.value = ConnectionState.Connected(deviceName)
-                    // Read the real iPhone name from GAP service
-                    readGapDeviceName()
-                    // Read companion status to notify iPhone app
-                    readCompanionStatus()
-                    // Subscribe to call state & companion characteristic from companion app
-                    scope.launch {
-                        delay(500)
-                        subscribeToCallState()
-                        delay(300)
-                        subscribeToCompanionCharacteristic()
-                        delay(300)
-                        subscribeToAmsEntityUpdate()
-                        delay(300)
-                        subscribeToAmsRemoteCommand()
+            } else {
+                val charUuid = descriptor.characteristic.uuid
+                when (charUuid) {
+                    AncsConstants.DATA_SOURCE_UUID -> {
+                        Log.i(TAG, "Subscribed to Data Source, now subscribing to Notification Source")
+                        notificationSourceChar?.let { subscribeToCharacteristic(it) }
+                    }
+                    AncsConstants.NOTIFICATION_SOURCE_UUID -> {
+                        Log.i(TAG, "Subscribed to Notification Source — ANCS session active!")
+                        // Show initial name (may be truncated BLE name)
+                        val deviceName = resolveDeviceName()
+                        reconnectDelay = INITIAL_RECONNECT_DELAY_MS
+                        _connectionState.value = ConnectionState.Connected(deviceName)
+                        val session = gatt
+                        // Read the real iPhone name from GAP service
+                        readGapDeviceName()
+                        // Read companion status to notify iPhone app
+                        readCompanionStatus()
+                        // Subscribe to call state & companion characteristic from companion app
+                        scope.launch {
+                            delay(500)
+                            if (gatt !== session) return@launch
+                            subscribeToCallState()
+                            delay(300)
+                            if (gatt !== session) return@launch
+                            subscribeToCompanionCharacteristic()
+                            delay(300)
+                            if (gatt !== session) return@launch
+                            subscribeToAmsEntityUpdate()
+                            delay(300)
+                            if (gatt !== session) return@launch
+                            subscribeToAmsRemoteCommand()
+                        }
+                    }
+                    AncsConstants.QUICK_REPLY_CHARACTERISTIC_UUID -> startHeartbeat()
+                    AncsConstants.AMS_ENTITY_UPDATE_UUID -> {
+                        Log.i(TAG, "Subscribed to AMS Entity Update notifications (2F7CABCE) — enqueuing 3 sequential entity subscriptions!")
+                        amsManager.subscribeToEntityUpdates()
+                    }
+                    AncsConstants.AMS_REMOTE_COMMAND_UUID -> {
+                        Log.i(TAG, "Subscribed to AMS Remote Command notifications!")
                     }
                 }
-                AncsConstants.AMS_ENTITY_UPDATE_UUID -> {
-                    Log.i(TAG, "Subscribed to AMS Entity Update notifications — sending entity subscriptions!")
-                    amsManager.subscribeToEntityUpdates()
-                }
-                AncsConstants.AMS_REMOTE_COMMAND_UUID -> {
-                    Log.i(TAG, "Subscribed to AMS Remote Command notifications!")
-                }
             }
-
-            // Process next queued descriptor write
-            processDescriptorWriteQueue()
+            processNextGattOperation()
         },
         onCharacteristicWritten = { characteristic, status ->
-            writeWatchdogJob?.cancel()
-            isWritingCharacteristic = false
+            gattWatchdogJob?.cancel()
+            synchronized(gattLock) {
+                isGattOperationInFlight = false
+            }
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 Log.e(TAG, "Characteristic write failed: $status for ${characteristic.uuid}")
             } else {
                 Log.i(TAG, "Characteristic write confirmed for ${characteristic.uuid}")
                 if (characteristic.uuid == AncsConstants.AMS_ENTITY_ATTRIBUTE_UUID) {
-                    Log.d(TAG, "AMS Entity Attribute write confirmed, triggering read")
-                    amsManager.triggerEntityAttributeRead()
+                    Log.d(TAG, "AMS Entity Attribute write confirmed, enqueuing read")
+                    enqueueGattOperation(GattOperation.ReadCharacteristic(characteristic))
                 }
             }
-            processCharacteristicWriteQueue()
+            processNextGattOperation()
         },
         onMtuChanged = { mtu, status ->
             Log.i(TAG, "MTU negotiated: $mtu (status=$status)")
-            negotiatedMtu = mtu
+            negotiatedMtu = if (status == BluetoothGatt.GATT_SUCCESS) mtu else 23
             // After MTU negotiation, discover services
             gatt?.discoverServices()
         },
+        onCharacteristicReadFailure = {
+            gattWatchdogJob?.cancel()
+            synchronized(gattLock) {
+                isGattOperationInFlight = false
+            }
+            processNextGattOperation()
+        },
         onCharacteristicReadCallback = { characteristic, value ->
+            gattWatchdogJob?.cancel()
+            synchronized(gattLock) {
+                isGattOperationInFlight = false
+            }
             if (characteristic.uuid == AncsConstants.AMS_ENTITY_ATTRIBUTE_UUID) {
                 amsManager.handleEntityAttributeRead(value)
             } else {
                 onCharacteristicRead(characteristic.uuid, value)
             }
+            processNextGattOperation()
         },
         onCallStateChanged = { data ->
             _callStateEvents.tryEmit(data)
         },
         onCompanionDataReceived = { data ->
-            handleCompanionData(data)
+            gatt?.let { source ->
+                if (companionPackets.trySend(source to data).isFailure) Log.w(TAG, "Companion packet queue is full")
+            }
         },
         onAmsEntityUpdate = { data ->
             amsManager.handleEntityUpdate(data)
@@ -367,7 +419,20 @@ class BleConnectionManager(private val context: Context) {
             BLEPacketMultiplexer.CHANNEL_PING_CONTROL -> {
                 val str = String(payload, Charsets.UTF_8)
                 Log.i(TAG, "Multiplexer Ping/Control payload: $str")
-                if (str.contains("\"type\":\"call_state\"") || str.contains("RINGING")) {
+                val status = runCatching { JSONObject(str) }.getOrNull()
+                if (status?.optString("type") == "bridge_pong") {
+                    if (status.optLong("nonce") != pendingHeartbeat || pendingHeartbeat == 0L) return
+                    lastHeartbeatReply = android.os.SystemClock.elapsedRealtime()
+                    heartbeatConfirmed = true
+                    _companionConnected.value = true
+                    val battery = status.optInt("battery", -1)
+                    if (battery in 0..100) {
+                        context.getSharedPreferences("phone_status", Context.MODE_PRIVATE).edit()
+                            .putInt("battery", battery)
+                            .putLong("updatedAt", System.currentTimeMillis())
+                            .apply()
+                    }
+                } else if (str.contains("\"type\":\"call_state\"") || str.contains("RINGING")) {
                     handleMockCallState(str)
                 } else if (str.contains("\"type\":\"alert\"")) {
                     handleAlertPacket(str)
@@ -393,7 +458,7 @@ class BleConnectionManager(private val context: Context) {
             }
             BLEPacketMultiplexer.CHANNEL_MEDIA_QOL -> {
                 Log.i(TAG, "Multiplexer Media QoL payload received: ${payload.size} bytes")
-                com.wearos.ancsbridge.media.MediaPlayerRepository.getInstance(context).handleMediaQoLPayload(payload)
+                scope.launch { mediaRepo.handleMediaQoLPayload(payload) }
             }
             BLEPacketMultiplexer.CHANNEL_BINARY_FILE -> {
                 Log.i(TAG, "Multiplexer File payload received: ${payload.size} bytes")
@@ -475,7 +540,9 @@ class BleConnectionManager(private val context: Context) {
             context,
             false,
             gattCallback,
-            BluetoothDevice.TRANSPORT_LE
+            BluetoothDevice.TRANSPORT_LE,
+            BluetoothDevice.PHY_LE_1M_MASK,
+            android.os.Handler(android.os.Looper.getMainLooper())
         )
     }
 
@@ -502,7 +569,9 @@ class BleConnectionManager(private val context: Context) {
             context,
             true,
             gattCallback,
-            BluetoothDevice.TRANSPORT_LE
+            BluetoothDevice.TRANSPORT_LE,
+            BluetoothDevice.PHY_LE_1M_MASK,
+            android.os.Handler(android.os.Looper.getMainLooper())
         )
     }
 
@@ -510,12 +579,9 @@ class BleConnectionManager(private val context: Context) {
      * Write to the ANCS Control Point characteristic.
      */
     fun writeControlPoint(data: ByteArray): Boolean {
-        val gatt = this.gatt ?: return false
         val char = controlPointChar ?: return false
-
-        char.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        char.value = data
-        return gatt.writeCharacteristic(char)
+        enqueueGattOperation(GattOperation.WriteCharacteristic(char, data, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT))
+        return true
     }
 
     /** Cached real device name read from GAP characteristic */
@@ -546,8 +612,8 @@ class BleConnectionManager(private val context: Context) {
         val deviceNameUuid = java.util.UUID.fromString("00002A00-0000-1000-8000-00805f9b34fb")
         val service = gatt.getService(gapServiceUuid) ?: return
         val char = service.getCharacteristic(deviceNameUuid) ?: return
-        gatt.readCharacteristic(char)
-        Log.i(TAG, "Reading GAP Device Name characteristic")
+        Log.i(TAG, "Enqueuing GAP Device Name characteristic read")
+        enqueueGattOperation(GattOperation.ReadCharacteristic(char))
     }
 
     fun onCharacteristicRead(characteristicUuid: java.util.UUID, value: ByteArray) {
@@ -600,8 +666,8 @@ class BleConnectionManager(private val context: Context) {
         if (service != null) {
             val char = service.getCharacteristic(statusCharUuid)
             if (char != null) {
-                gatt.readCharacteristic(char)
-                Log.i(TAG, "Reading companion status characteristic to notify iPhone app")
+                Log.i(TAG, "Enqueuing companion status characteristic read to notify iPhone app")
+                enqueueGattOperation(GattOperation.ReadCharacteristic(char))
             } else {
                 Log.d(TAG, "Companion status characteristic not found")
             }
@@ -667,7 +733,87 @@ class BleConnectionManager(private val context: Context) {
         Log.i(TAG, "Subscribing to AMS Remote Command notifications 9B3C81D8")
     }
 
-    // MARK: - Outbound Characteristic Writes (Quick Reply, Battery, Health)
+    // MARK: - Outbound Characteristic Writes & Unified GATT Execution
+
+    fun enqueueGattOperation(operation: GattOperation) {
+        gattOperationQueue.add(operation)
+        processNextGattOperation()
+    }
+
+    private fun processNextGattOperation() {
+        synchronized(gattLock) {
+            val currentGatt = this.gatt ?: run {
+                gattOperationQueue.clear()
+                pendingCompanionPayloads.clear()
+                gattWatchdogJob?.cancel()
+                isGattOperationInFlight = false
+                return
+            }
+
+            if (isGattOperationInFlight) {
+                return
+            }
+
+            val nextOp = gattOperationQueue.poll() ?: run {
+                onDescriptorQueueDrained?.invoke()
+                return
+            }
+
+            isGattOperationInFlight = true
+
+            gattWatchdogJob?.cancel()
+            gattWatchdogJob = scope.launch {
+                delay(3000)
+                synchronized(gattLock) {
+                    if (this@BleConnectionManager.gatt !== currentGatt || !isGattOperationInFlight) return@launch
+                    Log.w(TAG, "GATT operation timed out. Retiring the connection.")
+                    retireGatt(currentGatt)
+                }
+            }
+
+            val success = try {
+                when (nextOp) {
+                    is GattOperation.WriteDescriptor -> {
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                            val status = currentGatt.writeDescriptor(nextOp.descriptor, nextOp.value)
+                            status == android.bluetooth.BluetoothStatusCodes.SUCCESS
+                        } else {
+                            @Suppress("DEPRECATION")
+                            nextOp.descriptor.value = nextOp.value
+                            @Suppress("DEPRECATION")
+                            currentGatt.writeDescriptor(nextOp.descriptor)
+                        }
+                    }
+                    is GattOperation.WriteCharacteristic -> {
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                            val status = currentGatt.writeCharacteristic(nextOp.characteristic, nextOp.value, nextOp.writeType)
+                            status == android.bluetooth.BluetoothStatusCodes.SUCCESS
+                        } else {
+                            @Suppress("DEPRECATION")
+                            nextOp.characteristic.value = nextOp.value
+                            @Suppress("DEPRECATION")
+                            nextOp.characteristic.writeType = nextOp.writeType
+                            @Suppress("DEPRECATION")
+                            currentGatt.writeCharacteristic(nextOp.characteristic)
+                        }
+                    }
+                    is GattOperation.ReadCharacteristic -> {
+                        currentGatt.readCharacteristic(nextOp.characteristic)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Exception executing GattOperation $nextOp: ${e.message}", e)
+                false
+            }
+
+            if (!success) {
+                Log.w(TAG, "GattOperation execution returned false for $nextOp, releasing lock")
+                gattWatchdogJob?.cancel()
+                isGattOperationInFlight = false
+                processNextGattOperation()
+            }
+        }
+    }
 
     @Synchronized
     private fun enqueueCompanionWrite(payload: ByteArray): Boolean {
@@ -684,11 +830,24 @@ class BleConnectionManager(private val context: Context) {
         }
         if (prefix != null) {
             val prefixBytes = prefix.toByteArray(Charsets.UTF_8)
-            characteristicWriteQueue.removeIf { it.startsWith(prefixBytes) }
+            pendingCompanionPayloads.removeIf { it.startsWith(prefixBytes) }
         }
 
-        characteristicWriteQueue.add(payload)
-        processCharacteristicWriteQueue()
+        val char = findCompanionCharacteristic()
+        if (char == null) {
+            Log.d(TAG, "Companion characteristic not yet discovered. Buffering payload (${payload.size} bytes). Triggering discovery check.")
+            pendingCompanionPayloads.add(payload)
+            checkAndDiscoverCompanion()
+            return true
+        }
+
+        // Flush any buffered companion payloads first
+        while (pendingCompanionPayloads.isNotEmpty()) {
+            val buffered = pendingCompanionPayloads.poll() ?: break
+            enqueueGattOperation(GattOperation.WriteCharacteristic(char, buffered, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT))
+        }
+
+        enqueueGattOperation(GattOperation.WriteCharacteristic(char, payload, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT))
         return true
     }
 
@@ -698,64 +857,6 @@ class BleConnectionManager(private val context: Context) {
             if (this[i] != prefix[i]) return false
         }
         return true
-    }
-
-    @Synchronized
-    private fun processCharacteristicWriteQueue() {
-        val gatt = this.gatt ?: run {
-            characteristicWriteQueue.clear()
-            writeWatchdogJob?.cancel()
-            isWritingCharacteristic = false
-            return
-        }
-
-        if (isWritingDescriptor || descriptorWriteQueue.isNotEmpty() || isWritingCharacteristic) {
-            Log.d(TAG, "processCharacteristicWriteQueue: Deferring write (busy). Queue size: ${characteristicWriteQueue.size}")
-            return
-        }
-
-        val char = findCompanionCharacteristic()
-        if (char == null) {
-            if (characteristicWriteQueue.isNotEmpty()) {
-                Log.d(TAG, "processCharacteristicWriteQueue: Companion characteristic not yet discovered. Queue size: ${characteristicWriteQueue.size}. Triggering discovery check.")
-                checkAndDiscoverCompanion()
-            }
-            return
-        }
-
-        val nextPayload = characteristicWriteQueue.poll() ?: return
-
-        isWritingCharacteristic = true
-        Log.i(TAG, "processCharacteristicWriteQueue: Dispatching write (${nextPayload.size} bytes)")
-
-        writeWatchdogJob?.cancel()
-        writeWatchdogJob = scope.launch {
-            delay(2500)
-            if (isWritingCharacteristic) {
-                Log.w(TAG, "writeCharacteristic timed out after 2500ms, resetting lock")
-                isWritingCharacteristic = false
-                processCharacteristicWriteQueue()
-            }
-        }
-
-        val success = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            val status = gatt.writeCharacteristic(char, nextPayload, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
-            status == android.bluetooth.BluetoothStatusCodes.SUCCESS
-        } else {
-            @Suppress("DEPRECATION")
-            char.value = nextPayload
-            @Suppress("DEPRECATION")
-            char.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-            @Suppress("DEPRECATION")
-            gatt.writeCharacteristic(char)
-        }
-
-        if (!success) {
-            Log.e(TAG, "processCharacteristicWriteQueue: writeCharacteristic returned false, unblocking queue")
-            writeWatchdogJob?.cancel()
-            isWritingCharacteristic = false
-            processCharacteristicWriteQueue()
-        }
     }
 
     /**
@@ -771,7 +872,7 @@ class BleConnectionManager(private val context: Context) {
      * Send payload over any multiplexer channel to the companion app.
      */
     fun sendChannelPayload(channel: Byte, data: ByteArray): Boolean {
-        val mtu = (negotiatedMtu - 3).coerceAtLeast(20)
+        val mtu = (negotiatedMtu - 3).coerceIn(20, 512)
         val chunks = multiplexer.createChunks(channel, data, mtu)
         var success = true
         for (chunk in chunks) {
@@ -784,13 +885,12 @@ class BleConnectionManager(private val context: Context) {
      * Send multiplexed quick reply.
      */
     fun sendMultiplexedQuickReply(notificationUid: Int, replyText: String): Boolean {
-        val payload = "{\"type\":\"reply\",\"uid\":$notificationUid,\"message\":\"$replyText\"}".toByteArray(Charsets.UTF_8)
-        val chunks = multiplexer.createChunks(BLEPacketMultiplexer.CHANNEL_MESSAGE_REPLY, payload, (negotiatedMtu - 3).coerceAtLeast(20))
-        var success = true
-        for (chunk in chunks) {
-            if (!enqueueCompanionWrite(chunk)) success = false
-        }
-        return success
+        val payload = org.json.JSONObject()
+            .put("type", "reply")
+            .put("uid", notificationUid)
+            .put("message", replyText)
+            .toString().toByteArray(Charsets.UTF_8)
+        return sendChannelPayload(BLEPacketMultiplexer.CHANNEL_MESSAGE_REPLY, payload)
     }
 
     /**
@@ -833,10 +933,11 @@ class BleConnectionManager(private val context: Context) {
     fun disconnect() {
         autoReconnect = false
         reconnectJob?.cancel()
-        gatt?.disconnect()
-        gatt?.close()
+        val previousGatt = gatt
         gatt = null
         clearCharacteristics()
+        previousGatt?.disconnect()
+        previousGatt?.close()
         targetDevice = null
         _connectionState.value = ConnectionState.Idle
     }
@@ -857,9 +958,9 @@ class BleConnectionManager(private val context: Context) {
     }
 
     private fun subscribeToCharacteristic(characteristic: BluetoothGattCharacteristic) {
-        val gatt = this.gatt ?: return
+        val currentGatt = this.gatt ?: return
 
-        gatt.setCharacteristicNotification(characteristic, true)
+        currentGatt.setCharacteristicNotification(characteristic, true)
 
         val descriptor = characteristic.getDescriptor(AncsConstants.CCCD_UUID)
         if (descriptor == null) {
@@ -867,33 +968,46 @@ class BleConnectionManager(private val context: Context) {
             return
         }
 
-        descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+        enqueueGattOperation(GattOperation.WriteDescriptor(descriptor, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE))
+    }
 
-        descriptorWriteQueue.add(characteristic to descriptor)
-        if (!isWritingDescriptor) {
-            processDescriptorWriteQueue()
+    private fun startHeartbeat() {
+        heartbeatJob?.cancel()
+        val session = gatt ?: return
+        heartbeatJob = scope.launch {
+            while (gatt === session) {
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (heartbeatConfirmed && now - lastHeartbeatReply > 100_000L) {
+                    _companionConnected.value = false
+                    synchronized(gattLock) {
+                        if (gatt === session) retireGatt(session)
+                    }
+                    return@launch
+                }
+                if (!isQueueBusy) {
+                    val wakeLock = (context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager)
+                        .newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "WearBridge:heartbeat")
+                    wakeLock.acquire(5_000L)
+                    try {
+                        pendingHeartbeat = now
+                        val ping = JSONObject().put("type", "bridge_ping").put("nonce", now)
+                        sendChannelPayload(BLEPacketMultiplexer.CHANNEL_PING_CONTROL, ping.toString().toByteArray())
+                        delay(1_500L)
+                    } finally {
+                        if (wakeLock.isHeld) wakeLock.release()
+                    }
+                }
+                delay(45_000L)
+            }
         }
     }
 
-    private fun processDescriptorWriteQueue() {
-        if (descriptorWriteQueue.isEmpty()) {
-            isWritingDescriptor = false
-            Log.i(TAG, "ANCS descriptor write queue fully drained")
-            onDescriptorQueueDrained?.invoke()
-            processCharacteristicWriteQueue()
-            return
-        }
-        val (_, descriptor) = descriptorWriteQueue.poll() ?: run {
-            isWritingDescriptor = false
-            onDescriptorQueueDrained?.invoke()
-            return
-        }
-        isWritingDescriptor = true
-        val success = gatt?.writeDescriptor(descriptor) ?: false
-        if (!success) {
-            isWritingDescriptor = false
-            processDescriptorWriteQueue()
-        }
+    private fun retireGatt(previousGatt: BluetoothGatt) {
+        gatt = null
+        clearCharacteristics()
+        previousGatt.close()
+        _connectionState.value = ConnectionState.Disconnected()
+        if (autoReconnect && targetDevice != null) scheduleReconnect()
     }
 
     private fun scheduleReconnect() {
@@ -907,23 +1021,27 @@ class BleConnectionManager(private val context: Context) {
     }
 
     private fun clearCharacteristics() {
+        heartbeatJob?.cancel()
+        heartbeatConfirmed = false
+        _companionConnected.value = false
+        lastHeartbeatReply = 0L
+        pendingHeartbeat = 0L
         notificationSourceChar = null
         controlPointChar = null
         dataSourceChar = null
-        writeWatchdogJob?.cancel()
+        gattWatchdogJob?.cancel()
         companionRetryJob?.cancel()
-        descriptorWriteQueue.clear()
-        characteristicWriteQueue.clear()
-        isWritingDescriptor = false
-        isWritingCharacteristic = false
+        gattOperationQueue.clear()
+        pendingCompanionPayloads.clear()
+        isGattOperationInFlight = false
         amsManager.reset()
     }
 
     fun destroy() {
-        autoReconnect = false
-        reconnectJob?.cancel()
-        gatt?.disconnect()
-        gatt?.close()
-        gatt = null
+        scope.cancel()
+        mediaRepo.outboundChannelSender = null
+        com.wearos.ancsbridge.messages.MessageReplyManager.getInstance(context).outboundReplyDispatcher = null
+        com.wearos.ancsbridge.filetransfer.FileTransferManager.getInstance(context).outboundPacketSender = null
+        disconnect()
     }
 }

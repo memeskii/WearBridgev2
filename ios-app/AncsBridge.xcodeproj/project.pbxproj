@@ -23,6 +23,7 @@
 		A1E300A14C6F4E8A9B2D7FA1 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E300A04C6F4E8A9B2D7FA0 /* DashboardView.swift */; };
 		A1E300A34C6F4E8A9B2D7FA3 /* WatchFaceHubView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E300A24C6F4E8A9B2D7FA2 /* WatchFaceHubView.swift */; };
 		A1E300A54C6F4E8A9B2D7FA5 /* DeviceSyncView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E300A44C6F4E8A9B2D7FA4 /* DeviceSyncView.swift */; };
+		F21E6E5401F341D6A807132F /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = F21E6E5401F341D6A8071330 /* Theme.swift */; };
 		A1E300A94C6F4E8A9B2D7FA9 /* AppBrandRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E300A84C6F4E8A9B2D7FA8 /* AppBrandRegistry.swift */; };
 		0C1339CAF49308EE12D67173 /* BLEViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B64A6B42E55DCF830BD9501 /* BLEViewModel.swift */; };
 		0D89D3ECFF7D0E5DF95C362D /* BLEConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4027EE6B08DD2500C1BF6E94 /* BLEConstants.swift */; };
@@ -71,6 +72,7 @@
 		A1E300A04C6F4E8A9B2D7FA0 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
 		A1E300A24C6F4E8A9B2D7FA2 /* WatchFaceHubView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchFaceHubView.swift; sourceTree = "<group>"; };
 		A1E300A44C6F4E8A9B2D7FA4 /* DeviceSyncView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceSyncView.swift; sourceTree = "<group>"; };
+		F21E6E5401F341D6A8071330 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		03B56BE4BCAB856A9AFE50DB /* HowItWorksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HowItWorksView.swift; sourceTree = "<group>"; };
 		076673E488AFB468ED2E2EF9 /* StatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusView.swift; sourceTree = "<group>"; };
 		0C4E6DA939E59F8521934572 /* QuickReplySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickReplySettingsView.swift; sourceTree = "<group>"; };
@@ -144,6 +146,7 @@
 				A1E300A04C6F4E8A9B2D7FA0 /* DashboardView.swift */,
 				A1E300A24C6F4E8A9B2D7FA2 /* WatchFaceHubView.swift */,
 				A1E300A44C6F4E8A9B2D7FA4 /* DeviceSyncView.swift */,
+				F21E6E5401F341D6A8071330 /* Theme.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -377,6 +380,7 @@
 				A1E300A14C6F4E8A9B2D7FA1 /* DashboardView.swift in Sources */,
 				A1E300A34C6F4E8A9B2D7FA3 /* WatchFaceHubView.swift in Sources */,
 				A1E300A54C6F4E8A9B2D7FA5 /* DeviceSyncView.swift in Sources */,
+				F21E6E5401F341D6A807132F /* Theme.swift in Sources */,
 				98910C98FC720871E4544C25 /* HowItWorksView.swift in Sources */,
 				25BCDC2B3260F8615BAF50A9 /* PairedDevice.swift in Sources */,
 				E0FE400394C388A4F3E3D11E /* PeripheralManager.swift in Sources */,
@@ -566,14 +570,14 @@
 				CODE_SIGN_ENTITLEMENTS = AncsBridge/AncsBridge.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 200;
+				CURRENT_PROJECT_VERSION = 210;
 				DEVELOPMENT_TEAM = R68RHN3HF5;
 				INFOPLIST_FILE = "AncsBridge/Info-Generated.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.0.0;
+				MARKETING_VERSION = 2.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.wearos.ancsbridge.companion;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.9;
@@ -589,14 +593,14 @@
 				CODE_SIGN_ENTITLEMENTS = AncsBridge/AncsBridge.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Distribution";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 200;
+				CURRENT_PROJECT_VERSION = 210;
 				DEVELOPMENT_TEAM = R68RHN3HF5;
 				INFOPLIST_FILE = "AncsBridge/Info-Generated.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.0.0;
+				MARKETING_VERSION = 2.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.wearos.ancsbridge.companion;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.9;

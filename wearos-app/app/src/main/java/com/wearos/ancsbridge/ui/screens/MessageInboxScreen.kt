@@ -29,7 +29,7 @@ import androidx.compose.material.icons.rounded.HourglassTop
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Send
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -66,7 +66,8 @@ fun MessageInboxScreen() {
     val syncManager = remember { MessageSyncManager.getInstance(context) }
     val replyManager = remember { MessageReplyManager.getInstance(context) }
 
-    val conversationSummaries by syncManager.getConversationThreads().collectAsState(initial = emptyList())
+    val threads = remember(syncManager) { syncManager.getConversationThreads() }
+    val conversationSummaries by threads.collectAsStateWithLifecycle(initialValue = emptyList())
     var selectedThread by remember { mutableStateOf<ConversationSummary?>(null) }
 
     if (selectedThread != null) {
@@ -240,7 +241,8 @@ private fun ThreadDetailScreen(
 ) {
     val context = LocalContext.current
     val messageDao = remember { AppDatabase.getInstance(context).messageDao() }
-    val messages by messageDao.getMessagesForThread(thread.threadKey).collectAsState(initial = emptyList())
+    val threadMessages = remember(messageDao, thread.threadKey) { messageDao.getMessagesForThread(thread.threadKey) }
+    val messages by threadMessages.collectAsStateWithLifecycle(initialValue = emptyList())
     val brand = AppBrandRegistry.resolve(thread.appBundleId)
 
     val quickReplies = listOf("Yes", "On my way", "OK", "Can't talk now", "Call you later")

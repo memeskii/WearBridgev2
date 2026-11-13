@@ -11,6 +11,28 @@ import java.nio.ByteOrder
 class BLEPacketMultiplexerTest {
 
     @Test
+    fun oversizedFileFrameIsRejectedAndNextValidFrameIsDelivered() {
+        val multiplexer = BLEPacketMultiplexer()
+        val channel = BLEPacketMultiplexer.CHANNEL_BINARY_FILE
+        val maxPayloadSize = com.wearos.ancsbridge.filetransfer.FileTransferConstants.WINDOW_SIZE_BYTES + 1
+        var errors = 0
+        val deliveredSizes = mutableListOf<Int>()
+        multiplexer.outboundChunkWriter = { chunk ->
+            if ((chunk[1].toInt() and BLEPacketMultiplexer.FLAG_CRC_ERROR.toInt()) != 0) errors++
+            true
+        }
+        multiplexer.onPayloadReceived = { _, payload -> deliveredSizes.add(payload.size) }
+
+        multiplexer.createChunks(channel, ByteArray(maxPayloadSize + 1), 508)
+            .forEach(multiplexer::processIncomingChunk)
+        multiplexer.createChunks(channel, ByteArray(maxPayloadSize), 508)
+            .forEach(multiplexer::processIncomingChunk)
+
+        assertEquals(1, errors)
+        assertEquals(listOf(maxPayloadSize), deliveredSizes)
+    }
+
+    @Test
     fun testCrc32StandardVector() {
         val testString = "123456789"
         val data = testString.toByteArray(Charsets.UTF_8)

@@ -1,12 +1,14 @@
 package com.wearos.ancsbridge.viewmodel
 
 import android.annotation.SuppressLint
+import android.Manifest
 import android.app.Application
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.ScanResult
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -30,6 +32,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
 
     // Observe the service's shared connection state directly
+    val companionConnected = AncsService.companionConnected
     val connectionState: StateFlow<ConnectionState> = AncsService.sharedConnectionState
 
     // Observe active live notifications received via ANCS
@@ -72,6 +75,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun scanAndConnect() {
         if (_isScanning.value) return
+        val context = getApplication<Application>()
+        if (context.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED ||
+            context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
+        ) {
+            _scanStatus.value = "Allow Nearby devices in Settings to connect."
+            return
+        }
         _isScanning.value = true
         _scanStatus.value = "Looking for WearBridge app..."
         discoveredAppleDevices.clear()
@@ -98,6 +108,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     return@collect
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 _scanStatus.value = "Scan error: ${e.message}"
                 _isScanning.value = false
             }
@@ -129,21 +140,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun connectToDevice(address: String) {
         stopScan()
-
-        val context = getApplication<Application>()
-        val intent = Intent(context, AncsService::class.java).apply {
-            action = AncsService.ACTION_CONNECT
-            putExtra(AncsService.EXTRA_DEVICE_ADDRESS, address)
-        }
-        context.startForegroundService(intent)
+        connectByAddress(address)
     }
 
     /**
      * Connect directly to a device by its Bluetooth MAC address.
-     * Used when we know the iPhone's classic BT address from Settings.
      */
     fun connectByAddress(address: String) {
         val context = getApplication<Application>()
+        if (context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            _scanStatus.value = "Allow Nearby devices in Settings to connect."
+            return
+        }
+        if (!android.bluetooth.BluetoothAdapter.checkBluetoothAddress(address)) {
+            _scanStatus.value = "Enter a valid Bluetooth address."
+            return
+        }
         val intent = Intent(context, AncsService::class.java).apply {
             action = AncsService.ACTION_CONNECT
             putExtra(AncsService.EXTRA_DEVICE_ADDRESS, address)
@@ -153,6 +165,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun startService() {
         val context = getApplication<Application>()
+        if (context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return
         val intent = Intent(context, AncsService::class.java).apply {
             action = AncsService.ACTION_START
         }
@@ -177,6 +190,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun hasBondedIPhone(): Boolean {
         val context = getApplication<Application>()
+        if (context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return false
         val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         val adapter = manager.adapter ?: return false
         return adapter.bondedDevices.any { device ->
